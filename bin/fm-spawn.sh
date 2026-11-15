@@ -1043,9 +1043,8 @@ SPAWN_META_PUBLISH_STARTED=0
 SPAWN_FRESH_COMMIT_PENDING=0
 SPAWN_TASK_SET_LOCK=
 SPAWN_TASK_SET_LOCK_HELD=0
-SPAWN_TREEHOUSE_PROJECT_LOCK=
-SPAWN_TREEHOUSE_PROJECT_LOCK_HELD=0
-SPAWN_SLOT_CLAIMED=0
+SPAWN_WT_CREATED=0
+SPAWN_WT_BRANCH=
 RELAUNCH_REPLACEMENT_PENDING=0
 RELAUNCH_REPLACEMENT_BUSY_GEN=
 RELAUNCH_REPLACEMENT_HARNESS=
@@ -1177,26 +1176,16 @@ spawn_abort_cleanup() {
     SPAWN_META_LOCK_HELD=0
     fm_lock_release "$SPAWN_META_LOCK" || true
   fi
-  # A spawn that aborts after claiming its slot but before its record survives
-  # must not leave a claim naming a task no record describes. The release is a
-  # read-then-remove, so it runs only while the project lock that wrote the
-  # claim is still held (aborts before metadata publication); a later abort has
-  # already released that lock and leaves the claim for the next spawn's
-  # atomic replacement rather than racing it. The release itself never removes
-  # another task's claim.
-  if [ "$SPAWN_SLOT_CLAIMED" = 1 ] && [ -n "${WT:-}" ] &&
-    [ ! -e "$STATE/$ID.meta" ] && [ ! -L "$STATE/$ID.meta" ] &&
-    fm_treehouse_pool_slot "$PROJ_ABS" "$WT"; then
-    SPAWN_SLOT_CLAIMED=0
-    if [ "$SPAWN_TREEHOUSE_PROJECT_LOCK_HELD" = 1 ]; then
-      fm_treehouse_slot_owner_release "$WT" "$ID" || true
-    else
-      echo "warning: leaving task $ID's slot claim on $WT in place; the Treehouse project lock is no longer held, so the next spawn's claim replaces it" >&2
-    fi
-  fi
-  if [ "$SPAWN_TREEHOUSE_PROJECT_LOCK_HELD" = 1 ]; then
-    SPAWN_TREEHOUSE_PROJECT_LOCK_HELD=0
-    fm_lock_release "$SPAWN_TREEHOUSE_PROJECT_LOCK" || true
+  # A spawn that aborts after creating its worktree but before its record
+  # survives must not strand a branch and worktree no record describes, because
+  # the next spawn of the same task id would then refuse on the existing branch.
+  # `wt remove` never discards work: it keeps a dirty worktree and an unmerged
+  # branch, so this only reclaims the untouched worktree this very run created.
+  if [ "$SPAWN_WT_CREATED" = 1 ] && [ -n "$SPAWN_WT_BRANCH" ] &&
+    [ ! -e "$STATE/$ID.meta" ] && [ ! -L "$STATE/$ID.meta" ]; then
+    SPAWN_WT_CREATED=0
+    wt -C "$PROJ_ABS" remove "$SPAWN_WT_BRANCH" --foreground >/dev/null 2>&1 ||
+      echo "warning: aborted spawn of $ID left worktree branch $SPAWN_WT_BRANCH in place; inspect it with wt list before retrying" >&2
   fi
   if [ "$SPAWN_TASK_SET_LOCK_HELD" = 1 ]; then
     SPAWN_TASK_SET_LOCK_HELD=0
@@ -2505,17 +2494,6 @@ else
   WT=""
   BRIEF="$DATA/$ID/brief.md"
 fi
-if [ "$RELAUNCH" -eq 0 ] && [ "$KIND" != secondmate ] && [ "$BACKEND" != orca ]; then
-  SPAWN_TREEHOUSE_PROJECT_LOCK=$(fm_treehouse_project_lock_path "$PROJ_ABS") || {
-    echo "error: could not resolve the shared Treehouse project lock for $PROJ_ABS" >&2
-    exit 1
-  }
-  if ! fm_lock_try_acquire "$SPAWN_TREEHOUSE_PROJECT_LOCK"; then
-    echo "error: another Treehouse slot allocation or return is in progress for $PROJ_ABS; refusing to race it" >&2
-    exit 1
-  fi
-  SPAWN_TREEHOUSE_PROJECT_LOCK_HELD=1
-fi
 [ -f "$BRIEF" ] || {
   echo "error: task $ID has no brief at inaccessible data path $BRIEF" >&2
   exit 1
@@ -2764,6 +2742,40 @@ spawn_worktree_has_origin_config() { # <worktree>
     awk '/^[[:space:]]*\[[[:space:]]*[Rr][Ee][Mm][Oo][Tt][Ee][[:space:]]+"origin"[[:space:]]*\][[:space:]]*([#;].*)?$/ || /^[[:space:]]*\[[[:space:]]*[Rr][Ee][Mm][Oo][Tt][Ee]\.origin[[:space:]]*\][[:space:]]*([#;].*)?$/ { found=1 } END { exit !found }' "$config" && return 0
   done < <(git -C "$worktree" config --list --show-origin 2>/dev/null || true)
   return 1
+}
+
+# Print the ref a new task worktree is created from: origin's freshly fetched
+# default branch when the project has an origin, else its local default branch.
+# Refuses rather than start a worker from a base that may be stale.
+spawn_wt_base_ref() { # <project>
+  local project=$1 default target
+  if ! spawn_worktree_has_origin_config "$project"; then
+    default=$(default_branch "$project") || {
+      echo "error: could not determine the default branch of '$project'; refusing to launch from an unknown base" >&2
+      return 1
+    }
+    printf '%s\n' "$default"
+    return 0
+  fi
+  if ! git -C "$project" fetch --quiet origin; then
+    echo "error: could not fetch origin for '$project'; refusing to launch from a potentially stale base" >&2
+    return 1
+  fi
+  git -C "$project" remote set-head origin --auto >/dev/null 2>&1 || {
+    echo "error: could not resolve origin's current default branch for '$project'; refusing to launch from a potentially stale base" >&2
+    return 1
+  }
+  default=$(default_branch "$project") || {
+    echo "error: could not determine origin's default branch for '$project'; refusing to launch from a potentially stale base" >&2
+    return 1
+  }
+  target="origin/$default"
+  if ! git -C "$project" fetch --quiet origin "+refs/heads/$default:refs/remotes/origin/$default" ||
+    ! git -C "$project" rev-parse --verify --quiet "$target^{commit}" >/dev/null 2>&1; then
+    echo "error: could not fetch '$target' for '$project'; refusing to launch from a potentially stale base" >&2
+    return 1
+  fi
+  printf '%s\n' "$target"
 }
 
 freshen_spawn_worktree_base() { # <worktree>
@@ -3464,9 +3476,31 @@ if [ "$RELAUNCH" -eq 1 ]; then
   fi
   [ "$KIND" = secondmate ] || validate_spawn_worktree "relaunch" "$T"
 elif [ "$KIND" != secondmate ] && [ "$BACKEND" != orca ]; then
-  spawn_send_text_line "$WT_TARGET" 'treehouse get'
+  # Worktrunk owns the worktree, so create it here rather than inside the pane:
+  # the result is a structured path, not a cwd to be discovered by polling, and a
+  # failure surfaces as this script's own error instead of a wedged pane. One
+  # branch per task (fm/<id>) means no two tasks can ever share a worktree, so
+  # there is no slot to claim, lease, or hand on. The base is the freshly fetched
+  # default branch, so a new worktree starts current without a reset step.
+  SPAWN_WT_BASE=$(spawn_wt_base_ref "$PROJ_ABS") || exit 1
+  SPAWN_WT_BRANCH="fm/$ID"
+  command -v wt >/dev/null 2>&1 || {
+    echo "error: wt (Worktrunk) is not installed; it creates every task worktree" >&2
+    exit 1
+  }
+  WT_CREATE_JSON=$(wt -C "$PROJ_ABS" switch --create "$SPAWN_WT_BRANCH" --base "$SPAWN_WT_BASE" --no-cd --format json 2>/dev/null) || {
+    echo "error: wt could not create worktree branch $SPAWN_WT_BRANCH from $SPAWN_WT_BASE for project '$PROJ_ABS'; if the branch already exists, an earlier spawn of $ID left it behind - inspect it with wt list before retrying" >&2
+    exit 1
+  }
+  SPAWN_WT_CREATED=1
+  WT_CREATED_PATH=$(printf '%s' "$WT_CREATE_JSON" | jq -r 'select(.action == "created") | .path // empty' 2>/dev/null) || WT_CREATED_PATH=
+  if [ -z "$WT_CREATED_PATH" ] || [ ! -d "$WT_CREATED_PATH" ]; then
+    echo "error: wt reported no created worktree path for $SPAWN_WT_BRANCH (got: ${WT_CREATE_JSON:-nothing}); refusing to launch" >&2
+    exit 1
+  fi
+  spawn_send_text_line "$WT_TARGET" "cd $(printf '%q' "$WT_CREATED_PATH")"
 
-  # Wait for the treehouse subshell: the pane's cwd moves from the project to the worktree.
+  # Wait for the pane's cwd to move from the project to the worktree.
   # Target the stable window id, not the name: if the name is ever lost (e.g. an
   # automatic-rename slips through), display-message -t <bad-name> falls back to the
   # active client's window, which would misread firstmate's OWN pane path as the
@@ -3519,33 +3553,20 @@ elif [ "$KIND" != secondmate ] && [ "$BACKEND" != orca ]; then
     sleep 1
   done
   if [ -z "$WT" ]; then
-    echo "error: treehouse get did not enter an isolated worktree within 60s (last seen '${last_seen:-none}': $last_reason; spawning project '$PROJ_ABS'); inspect window $T" >&2
+    echo "error: the pane did not enter the isolated worktree $WT_CREATED_PATH within 60s (last seen '${last_seen:-none}': $last_reason; spawning project '$PROJ_ABS'); inspect window $T" >&2
+    exit 1
+  fi
+  if [ "$(real_path_or_raw "$WT")" != "$(real_path_or_raw "$WT_CREATED_PATH")" ]; then
+    echo "error: the pane settled in '$WT', not the worktree wt created at '$WT_CREATED_PATH'; refusing to launch an agent outside its own worktree; inspect window $T" >&2
     exit 1
   fi
 
-  validate_spawn_worktree "treehouse get" "$T"
+  validate_spawn_worktree "wt switch --create" "$T"
 
-  # Claim the pool slot for this task. The interactive `treehouse get` sent to
-  # the pane above records only a process lease (Treehouse's durable
-  # `get --lease --lease-holder`, which bin/fm-home-seed.sh uses for secondmate
-  # homes, is not this path), so Treehouse cannot say which task a slot belongs
-  # to once that task's worker exits - and that is exactly when the slot is
-  # handed on and this task's worktree= line goes stale. The claim is what lets
-  # bin/fm-teardown.sh leave a slot that has since been reassigned untouched, so
-  # a slot that cannot be claimed is refused here, at the cheapest point, rather
-  # than launching a worker whose slot teardown could later release out from
-  # under its successor.
-  # Written under the Treehouse project lock held from before slot allocation
-  # through metadata publication, so no other spawn or return sees a half-claim.
-  if fm_treehouse_pool_slot "$PROJ_ABS" "$WT"; then
-    if ! fm_treehouse_slot_owner_claim "$WT" "$ID" "$FM_HOME"; then
-      echo "error: could not claim Treehouse pool slot $WT for task $ID; refusing to launch a worker whose slot cannot later be proved to be its own; inspect window $T" >&2
-      exit 1
-    fi
-    SPAWN_SLOT_CLAIMED=1
-  fi
 fi
-if [ "$RELAUNCH" -eq 0 ] && [ "$KIND" != secondmate ]; then
+# Orca hands over a worktree it owns, so it still needs its base refreshed here;
+# a wt worktree was created from the freshly fetched default branch above.
+if [ "$RELAUNCH" -eq 0 ] && [ "$KIND" != secondmate ] && [ "$BACKEND" = orca ]; then
   freshen_spawn_worktree_base "$WT" || exit 1
 fi
 
@@ -4193,10 +4214,6 @@ fi
 # still being delivered, cannot observe or complete a fresh provisional record
 # between its state check and `tasks-axi start`, and a delivery failure cannot
 # follow a committed In-flight transition.
-if [ "$SPAWN_TREEHOUSE_PROJECT_LOCK_HELD" = 1 ]; then
-  SPAWN_TREEHOUSE_PROJECT_LOCK_HELD=0
-  fm_lock_release "$SPAWN_TREEHOUSE_PROJECT_LOCK"
-fi
 if [ "$SPAWN_TASK_SET_LOCK_HELD" = 1 ]; then
   # The record is published, so this task is now part of the set a teardown
   # enumerates and locks per task. The set lock is only needed across that
