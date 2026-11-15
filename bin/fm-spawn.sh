@@ -3177,6 +3177,7 @@ EOF
   hc)
     # The endpoint is the terminal's bare local address (t<N>); the terminal
     # is named fm-<id> and starts in the project directory.
+    fm_backend_hc_tool_check || exit 1
     SES=$(fm_backend_hc_container_ensure) || exit 1
     T=$(fm_backend_hc_create_task "$SES" "$W" "$PROJ_ABS") || exit 1
     case "$T" in
