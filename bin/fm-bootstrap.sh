@@ -879,6 +879,7 @@ install_cmd() {
 manual_install_url() {
   case "$1" in
     herdr) echo "https://herdr.dev" ;;
+    herdr-core) echo "docs/hc-backend.md (the hc backend's herdr-core binary has no public installer)" ;;
     cursor-agent) echo "https://cursor.com/cli" ;;
     *) return 1 ;;
   esac

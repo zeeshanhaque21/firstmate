@@ -774,7 +774,7 @@ fi
 # liveness, so a finished-but-pane-closed crew never reaches here. Down here there
 # is no run to consult, so only positive evidence that the target is gone may
 # read as death - a backend that failed to answer is unknown, never death, for
-# both classifier-backed backends (tmux and herdr) - and every death-class
+# every classifier-backed backend (tmux, herdr, and hc) - and every death-class
 # verdict reports unknown rather than trusting a possibly-stale status log as
 # the current state.
 [ -n "$BACKEND_TARGET" ] || emit unknown none "no backend target recorded"
@@ -782,7 +782,7 @@ if ! pane_readable "$BACKEND_TARGET"; then
   # A failed probe is not itself evidence the pane is gone: the herdr CLI can
   # error or stall under load, and tmux can fail to be executed at all (a
   # trimmed PATH) or answer non-definitively, while the pane is alive - a busy
-  # box would otherwise score dozens of live claims dead. Both backends own a
+  # box would otherwise score dozens of live claims dead. Each of these backends owns a
   # recovery-grade classifier (fm_backend_agent_state), which separates the
   # outcomes:
   #   missing - the endpoint is authoritatively absent: herdr's pane get
@@ -806,19 +806,19 @@ if ! pane_readable "$BACKEND_TARGET"; then
   # Backends with no classifier (orca, zellij, and cmux all report unverified)
   # keep their historical capture-failure-means-gone reading.
   case "$TASK_BACKEND" in
-    tmux|herdr) AGENT_STATE=$(fm_backend_agent_state "$TASK_BACKEND" "$BACKEND_TARGET") ;;
+    tmux|herdr|hc) AGENT_STATE=$(fm_backend_agent_state "$TASK_BACKEND" "$BACKEND_TARGET") ;;
     *) AGENT_STATE=none ;;
   esac
   case "$TASK_BACKEND:$AGENT_STATE" in
-    tmux:alive|herdr:alive)
+    tmux:alive|herdr:alive|hc:alive)
       ;;
-    tmux:missing|herdr:missing)
+    tmux:missing|herdr:missing|hc:missing)
       emit unknown none "backend target gone: $BACKEND_TARGET"
       ;;
-    tmux:dead|herdr:dead)
+    tmux:dead|herdr:dead|hc:dead)
       emit unknown none "backend target gone: $BACKEND_TARGET (agent gone, pane shell remains)"
       ;;
-    tmux:*|herdr:*)
+    tmux:*|herdr:*|hc:*)
       emit unknown none "backend unreachable ($TASK_BACKEND endpoint state: $AGENT_STATE)"
       ;;
     *)

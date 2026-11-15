@@ -57,19 +57,20 @@
 #   exact task only (docs/configuration.md "Runtime backend" owns when that flag
 #   is authorized). Without it, the script resolves FM_BACKEND, then
 #   config/backend, then runtime auto-detection from the runtime firstmate's
-#   environment: $TMUX, HERDR_ENV=1, or cmux runtime signals (via
+#   environment: $TMUX, HERDR_ENV=1, HC_TERMINAL_ID, or cmux runtime signals (via
 #   bin/fm-backend.sh's fm_backend_detect, with cmux fallback details in
 #   docs/cmux-backend.md),
 #   then tmux.
 #   Spawn-capable backends are the reference tmux adapter and experimental
-#   herdr, zellij, orca, and cmux. Orca owns both the task worktree and
+#   herdr, zellij, orca, cmux, and hc (the herdr-core terminal server; see
+#   docs/hc-backend.md). Orca owns both the task worktree and
 #   terminal, so ship/scout Orca spawns do not run treehouse get; cmux is a
 #   session provider only, exactly like herdr/zellij, so it does. An
-#   auto-detected herdr or cmux spawn prints a loud stderr notice;
+#   auto-detected herdr, cmux, or hc spawn prints a loud stderr notice;
 #   auto-detected tmux stays silent; zellij and orca are never auto-detected.
 #   codex-app is not a known backend yet; docs/codex-app-backend.md owns that
 #   blocked backend contract. Default tmux spawns do not write backend= to meta;
-#   absent backend= means tmux. cmux does not support --secondmate spawns yet.
+#   absent backend= means tmux. cmux and hc do not support --secondmate spawns yet.
 #   A backend spawn refusal (missing dependency, version gate, unauthenticated
 #   socket, or unsupported secondmate mode) is terminal for that selected backend;
 #   callers must surface it instead of silently retrying another backend.
@@ -243,6 +244,7 @@
 #   LANG LC_ALL LC_CTYPE TMPDIR TMP TEMP GOTMPDIR, plus backend identity/routing:
 #   TMUX TMUX_PANE HERDR_ENV HERDR_SESSION HERDR_SOCKET_PATH HERDR_PANE_ID
 #   CMUX_WORKSPACE_ID CMUX_SURFACE_ID CMUX_TAB_ID CMUX_PANEL_ID CMUX_SOCKET_PATH
+#   HC_TERMINAL_ID HC_TERMINAL_SOCKET HC_SCOPE
 #   ZELLIJ ZELLIJ_SESSION_NAME ZELLIJ_PANE_ID FM_ZELLIJ_SESSION, plus the task
 #   marker FM_TASK_ID that ship and scout panes receive above.
 #   An enabled task trace also retains TRACEPARENT. Explicit Firstmate launch
@@ -1416,6 +1418,10 @@ if [ "$RELAUNCH" -eq 0 ]; then
   fi
   if [ "$BACKEND" = cmux ] && [ "$KIND" = secondmate ]; then
     echo "error: backend=cmux does not support --secondmate spawns yet" >&2
+    exit 1
+  fi
+  if [ "$BACKEND" = hc ] && [ "$KIND" = secondmate ]; then
+    echo "error: backend=hc does not support --secondmate spawns yet" >&2
     exit 1
   fi
   if [ "$BACKEND" = orca ]; then
@@ -3168,6 +3174,25 @@ EOF
     fi
     T="$CMUX_WORKSPACE_ID:$CMUX_SURFACE_ID"
     ;;
+  hc)
+    # The endpoint is the terminal's bare local address (t<N>); the terminal
+    # is named fm-<id> and starts in the project directory.
+    SES=$(fm_backend_hc_container_ensure) || exit 1
+    T=$(fm_backend_hc_create_task "$SES" "$W" "$PROJ_ABS") || exit 1
+    case "$T" in
+    t?*) ;;
+    *)
+      echo "error: hc did not return a terminal address for $W" >&2
+      exit 1
+      ;;
+    esac
+    case "${T#t}" in
+    *[!0-9]*)
+      echo "error: hc returned a malformed terminal address '$T' for $W" >&2
+      exit 1
+      ;;
+    esac
+    ;;
   orca)
     set +e
     ORCA_WT_RAW=$(fm_backend_orca_worktree_create "$PROJ_ABS" "$W")
@@ -3213,6 +3238,7 @@ spawn_send_text_line() { # <target> <text>
   zellij) fm_backend_zellij_send_text_line "$1" "$2" "$W" ;;
   orca) fm_backend_orca_send_text_line "$1" "$2" ;;
   cmux) fm_backend_cmux_send_text_line "$1" "$2" "$W" ;;
+  hc) fm_backend_hc_send_text_line "$1" "$2" ;;
   esac
 }
 spawn_current_path() { # <target>
@@ -3221,6 +3247,7 @@ spawn_current_path() { # <target>
   herdr) fm_backend_herdr_current_path "$1" ;;
   zellij) fm_backend_zellij_current_path "$1" "$W" ;;
   cmux) fm_backend_cmux_current_path "$1" "$W" ;;
+  hc) fm_backend_hc_current_path "$1" ;;
   esac
 }
 spawn_send_literal() { # <target> <text>
@@ -3230,6 +3257,7 @@ spawn_send_literal() { # <target> <text>
   zellij) fm_backend_zellij_send_literal "$1" "$2" "$W" ;;
   orca) fm_backend_orca_send_literal "$1" "$2" ;;
   cmux) fm_backend_cmux_send_literal "$1" "$2" "$W" ;;
+  hc) fm_backend_hc_send_literal "$1" "$2" ;;
   esac
 }
 spawn_send_key() { # <target> <key>
@@ -3239,6 +3267,7 @@ spawn_send_key() { # <target> <key>
   zellij) fm_backend_zellij_send_key "$1" "$2" "$W" ;;
   orca) fm_backend_orca_send_key "$1" "$2" ;;
   cmux) fm_backend_cmux_send_key "$1" "$2" "$W" ;;
+  hc) fm_backend_hc_send_key "$1" "$2" ;;
   esac
 }
 
@@ -4363,7 +4392,8 @@ if [ "$LAUNCH_ENV_ENABLED" = 1 ]; then
   for env_name in HOME PATH USER LOGNAME SHELL TERM COLORTERM LANG LC_ALL LC_CTYPE \
     TMPDIR TMP TEMP GOTMPDIR TMUX TMUX_PANE HERDR_ENV HERDR_SESSION HERDR_SOCKET_PATH \
     HERDR_PANE_ID CMUX_WORKSPACE_ID CMUX_SURFACE_ID CMUX_TAB_ID CMUX_PANEL_ID \
-    CMUX_SOCKET_PATH ZELLIJ ZELLIJ_SESSION_NAME ZELLIJ_PANE_ID FM_ZELLIJ_SESSION \
+    CMUX_SOCKET_PATH HC_TERMINAL_ID HC_TERMINAL_SOCKET HC_SCOPE \
+    ZELLIJ ZELLIJ_SESSION_NAME ZELLIJ_PANE_ID FM_ZELLIJ_SESSION \
     FM_TASK_ID \
     $LAUNCH_ENV_NAMES; do
     # Only validated names enter shell syntax. Values expand once, quoted, in
@@ -4379,13 +4409,20 @@ if [ "$LAUNCH_ENV_ENABLED" = 1 ]; then
   LAUNCH="$LAUNCH_ENV_PREFIX /bin/sh -c $(shell_quote "$LAUNCH")"
 fi
 sleep 0.3
-spawn_send_literal "$T" "$LAUNCH"
-sleep 0.3
+if [ "$BACKEND" = hc ]; then
+  # hc has no primitive that pastes text without pressing Enter, so the
+  # literal-then-Enter pair below cannot be expressed; its send is paste plus
+  # Enter in one step. The launch is a single line, so the result is identical.
+  spawn_send_text_line "$T" "$LAUNCH"
+else
+  spawn_send_literal "$T" "$LAUNCH"
+  sleep 0.3
+fi
 if [ "${HERDR_PROJECTED:-0}" -eq 1 ]; then
   HERDR_PROJECTION_ABORT_CLEANUP=0
   spawn_herdr_presentation_order_lock_release
 fi
-spawn_send_key "$T" Enter
+[ "$BACKEND" = hc ] || spawn_send_key "$T" Enter
 if [ "$HARNESS" = kimi ]; then
   if ! kimi_wait_for_ready; then
     kimi_spawn_fail "kimi did not show a verified ready signal before brief delivery"

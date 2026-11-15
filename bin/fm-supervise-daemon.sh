@@ -83,8 +83,9 @@
 #                                   way bin/fm-backend.sh's fm_backend_detect
 #                                   resolves the runtime firstmate itself is
 #                                   executing inside - $TMUX_PANE selects tmux,
-#                                   $HERDR_ENV=1 selects herdr - falling back to
-#                                   tmux). zellij, orca, and cmux are not yet
+#                                   $HERDR_ENV=1 selects herdr, $HC_TERMINAL_ID
+#                                   selects hc - falling back to
+#                                   tmux). zellij, orca, cmux, and hc are not yet
 #                                   supported as supervisor backends; the daemon
 #                                   refuses loudly at startup rather than trying
 #                                   tmux primitives against a non-tmux pane.
@@ -196,7 +197,7 @@ FM_HOME="${FM_HOME:-${FM_ROOT_OVERRIDE:-$FM_ROOT}}"
 
 # --- tunables ---------------------------------------------------------------
 # Supervisor backends this daemon knows how to inject into today. zellij, orca,
-# and cmux are real backends elsewhere in firstmate (bin/fm-backend.sh) but this
+# cmux, and hc are real backends elsewhere in firstmate (bin/fm-backend.sh) but this
 # daemon has no verified composer/busy primitives wired up for them yet - see
 # docs/herdr-backend.md and AGENTS.md section 4's
 # harness-verification discipline. Selecting one refuses loudly at startup
@@ -1577,7 +1578,7 @@ fm_super_main() {
 
   # --- auto-discover the supervisor BACKEND (tmux vs herdr) first -----------
   # Priority: FM_SUPERVISOR_BACKEND override > $TMUX_PANE (tmux) > $HERDR_ENV=1
-  # (herdr) > tmux fallback. Resolved before the target below, since target
+  # (herdr) > $HC_TERMINAL_ID (hc, refused below) > tmux fallback. Resolved before the target below, since target
   # discovery composes a herdr "<session>:<pane-id>" string using the same
   # $HERDR_PANE_ID/$HERDR_SESSION markers this checks. Exporting the result
   # into FM_SUPERVISOR_BACKEND makes inject_msg/pane_is_busy/pane_input_pending
@@ -1590,6 +1591,8 @@ fm_super_main() {
       backend_source="TMUX_PANE"
     elif [ "${HERDR_ENV:-}" = "1" ] && [ -n "${HERDR_PANE_ID:-}" ]; then
       backend_source="HERDR_ENV"
+    elif [ -n "${HC_TERMINAL_ID:-}" ]; then
+      backend_source="HC_TERMINAL_ID"
     else
       backend_source="FALLBACK($FM_SUPERVISOR_BACKEND_DEFAULT)"
     fi
@@ -1599,7 +1602,7 @@ fm_super_main() {
   local BACKEND="$FM_SUPERVISOR_BACKEND"
 
   # --- refuse an unsupported supervisor backend loudly, before ever trying a
-  # tmux/herdr-specific call against it (zellij, orca, and cmux have no verified
+  # tmux/herdr-specific call against it (zellij, orca, cmux, and hc have no verified
   # composer/busy primitives wired up for this daemon yet - AGENTS.md section 4
   # harness-verification discipline). This is the clear refusal the task calls
   # for, instead of a confusing "does not resolve to a tmux pane" error.
