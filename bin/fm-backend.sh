@@ -561,7 +561,8 @@ fm_backend_validate_task_endpoint() {  # <meta-file> <task-id>
         echo "REFUSED: legacy hc endpoint metadata for task $id lacks an exact task binding; preserving task state." >&2
         return 1
       }
-      # The endpoint is the bare local terminal address (t<N>). Any other form,
+      # The endpoint is the bare local terminal address (t<N>, lowercase hex:
+      # hc hands out t19, t1b, t1c). Any other form,
       # notably a remote <machine>/t<N>, is refused: a task is only ever spawned
       # and cleaned up on this machine's hc server.
       case "$window" in
@@ -569,7 +570,7 @@ fm_backend_validate_task_endpoint() {  # <meta-file> <task-id>
         *) pane= ;;
       esac
       case "$pane" in
-        ''|*[!0-9]*)
+        ''|*[!0123456789abcdef]*)
           echo "REFUSED: hc endpoint metadata for task $id is not a local terminal address; preserving task state." >&2
           return 1
           ;;
@@ -803,7 +804,10 @@ fm_backend_send_text_submit() {  # <backend> <target> <text> <retries> <enter-sl
 # fm_backend_kill: remove the task's session endpoint (best-effort; a
 # nonexistent/already-gone target is not an error - callers already swallow
 # failures here exactly as the inline `tmux kill-window ... || true` did).
-fm_backend_kill() {  # <backend> <target>
+# The hc adapter additionally requires the task's terminal name as the LAST
+# argument (<backend> <target> <tab-id> <expected-label>, as fm-teardown.sh
+# passes it) and refuses a kill without it (docs/hc-backend.md).
+fm_backend_kill() {  # <backend> <target> [tab-id] [expected-label]
   local backend=$1
   shift
   [ -n "${1:-}" ] || { echo "error: refusing empty backend kill target" >&2; return 1; }
@@ -960,14 +964,17 @@ fm_backend_target_exists() {  # <backend> <target> [expected-label]
 # `missing` only in this recovery-grade view. Zellij remains unverified because
 # its secondmate ghost-tab and agent-process recovery path has not been
 # empirically validated. Orca and cmux do not support secondmate spawns. The hc
-# adapter owns its own classifier (docs/hc-backend.md).
-fm_backend_agent_state() {  # <backend> <target>
-  local backend=$1 target=$2
+# adapter owns its own classifier (docs/hc-backend.md). The optional
+# [expected-label] (fm-<task-id>) is read only by the hc adapter, where a
+# terminal under any other name reads `ambiguous`, never `dead`; callers that
+# know the task pass it, and without it hc requires only an `fm-` name prefix.
+fm_backend_agent_state() {  # <backend> <target> [expected-label]
+  local backend=$1 target=$2 expected_label=${3:-}
   fm_backend_source "$backend" || { printf 'unverified'; return 0; }
   case "$backend" in
     tmux) fm_backend_tmux_agent_state "$target" ;;
     herdr) fm_backend_herdr_agent_state "$target" ;;
-    hc) fm_backend_hc_agent_state "$target" ;;
+    hc) fm_backend_hc_agent_state "$target" "$expected_label" ;;
     *) printf 'unverified' ;;
   esac
 }
@@ -975,8 +982,8 @@ fm_backend_agent_state() {  # <backend> <target>
 # Backward-compatible three-state view for existing callers. An
 # authoritatively missing endpoint is confidently not a live agent, while every
 # ambiguous, unreadable, or unverified result stays unknown.
-fm_backend_agent_alive() {  # <backend> <target>
-  case "$(fm_backend_agent_state "$1" "$2")" in
+fm_backend_agent_alive() {  # <backend> <target> [expected-label]
+  case "$(fm_backend_agent_state "$1" "$2" "${3:-}")" in
     alive) printf 'alive' ;;
     dead|missing) printf 'dead' ;;
     *) printf 'unknown' ;;

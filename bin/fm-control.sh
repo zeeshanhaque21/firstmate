@@ -318,7 +318,7 @@ fm_backend_validate "$BACKEND" || exit 1
 # --- shared helpers ---------------------------------------------------------
 
 agent_state() {
-  fm_backend_agent_state "$BACKEND" "$T"
+  fm_backend_agent_state "$BACKEND" "$T" "$LABEL"
 }
 
 busy_verdict() {
