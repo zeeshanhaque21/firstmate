@@ -180,6 +180,14 @@
 #   itself a linked worktree of the project repository still launches. A pane
 #   that never reaches an isolated worktree refuses at the end of that wait,
 #   naming the last path seen and why it was rejected.
+#   `wt switch --create` runs the captain's user and project hooks, so it is
+#   bounded by FM_SPAWN_WT_CREATE_TIMEOUT seconds (default 300). A hook that
+#   fails or hangs can leave the worktree behind after wt has created it; the
+#   spawn then reads wt's JSON (or, when a timeout lost it, `git worktree list`
+#   for the fm/<id> branch this run just created), marks the worktree for the
+#   abort cleanup (a plain `wt remove`, never forced), and refuses naming the
+#   wt failure, so a retry of the same task id is not blocked by a stranded
+#   branch. A branch that already existed before this run is never touched.
 #   That placement is proven only at launch. Every ship or scout pane therefore
 #   also receives `export FM_TASK_ID=<task-id>` before the launch command, on
 #   the same channel as GOTMPDIR, and bin/fm-test-run.sh refuses to execute the
@@ -1031,6 +1039,7 @@ SPAWN_TASK_SET_LOCK=
 SPAWN_TASK_SET_LOCK_HELD=0
 SPAWN_WT_CREATED=0
 SPAWN_WT_BRANCH=
+SPAWN_HC_TERMINAL=
 RELAUNCH_REPLACEMENT_PENDING=0
 RELAUNCH_REPLACEMENT_BUSY_GEN=
 RELAUNCH_REPLACEMENT_HARNESS=
@@ -1161,6 +1170,17 @@ spawn_abort_cleanup() {
   if [ "$SPAWN_META_LOCK_HELD" = 1 ]; then
     SPAWN_META_LOCK_HELD=0
     fm_lock_release "$SPAWN_META_LOCK" || true
+  fi
+  # An hc terminal this very run created is closed before the worktree it may
+  # be sitting in is removed, and only while no record survives; a retry of the
+  # same task id would otherwise collide with the leftover terminal name. The
+  # adapter closes it only if its name is still exactly fm-<id>.
+  if [ -n "$SPAWN_HC_TERMINAL" ] &&
+    [ ! -e "$STATE/$ID.meta" ] && [ ! -L "$STATE/$ID.meta" ]; then
+    spawn_hc_terminal=$SPAWN_HC_TERMINAL
+    SPAWN_HC_TERMINAL=
+    fm_backend_kill hc "$spawn_hc_terminal" "" "fm-$ID" >/dev/null 2>&1 ||
+      echo "warning: aborted spawn of $ID left hc terminal $spawn_hc_terminal in place; inspect it with hc ls before retrying" >&2
   fi
   # A spawn that aborts after creating its worktree but before its record
   # survives must not strand a branch and worktree no record describes, because
@@ -1301,6 +1321,12 @@ fi
 ID=${POS[0]}
 fm_task_id_creation_valid "$ID" || {
   echo "error: invalid task id" >&2
+  exit 2
+}
+# The task branch is fm/<id>; refuse an id git cannot name before any endpoint
+# or worktree exists, instead of failing inside wt after a terminal was created.
+git check-ref-format "refs/heads/fm/$ID" || {
+  echo "error: task id '$ID' cannot form a valid git branch name (fm/$ID)" >&2
   exit 2
 }
 if [ -e "$STATE" ] || [ -L "$STATE" ]; then
@@ -1462,7 +1488,7 @@ if [ "$RELAUNCH" -eq 1 ]; then
     echo "error: backend '$BACKEND' has no recovery-grade agent-state classifier, so a relaunch cannot prove the previous agent exited; refusing rather than risking two agents in one endpoint" >&2
     exit 1
   }
-  RELAUNCH_STATE=$(fm_backend_agent_state "$BACKEND" "$RELAUNCH_TARGET")
+  RELAUNCH_STATE=$(fm_backend_agent_state "$BACKEND" "$RELAUNCH_TARGET" "fm-$ID")
   [ "$RELAUNCH_STATE" = dead ] || {
     echo "error: task $ID's endpoint reads '$RELAUNCH_STATE'; a relaunch requires a positively agent-free endpoint (stop the agent first with bin/fm-control.sh $ID exit)" >&2
     exit 1
@@ -2737,6 +2763,50 @@ spawn_worktree_has_origin_config() { # <worktree>
 # Print the ref a new task worktree is created from: origin's freshly fetched
 # default branch when the project has an origin, else its local default branch.
 # Refuses rather than start a worker from a base that may be stale.
+# spawn_wt_create: create the task worktree with `wt switch --create`, bounded
+# by FM_SPAWN_WT_CREATE_TIMEOUT. On success sets WT_CREATE_JSON, WT_CREATED_PATH
+# and SPAWN_WT_CREATED. wt runs the captain's hooks AFTER it creates the branch
+# and worktree, so a failing or timed-out hook still leaves them behind: they
+# are marked for the abort cleanup (SPAWN_WT_CREATED) whenever this run made
+# them, and the refusal names the wt failure. A branch that existed before the
+# call is never marked.
+spawn_wt_create() { # <project> <branch> <base> <id>
+  local project=$1 branch=$2 base=$3 id=$4 bound errfile rc=0 pre_existing=0 err_tail created_here=0
+  bound=${FM_SPAWN_WT_CREATE_TIMEOUT:-300}
+  case "$bound" in ''|*[!0-9]*|0*) bound=300 ;; esac
+  if git -C "$project" rev-parse --verify --quiet "refs/heads/$branch" >/dev/null 2>&1; then
+    pre_existing=1
+  fi
+  errfile=$(mktemp "${TMPDIR:-/tmp}/fm-spawn-wt-err.XXXXXX") || errfile=/dev/null
+  WT_CREATE_JSON=$(fm_run_timed "$bound" wt -C "$project" switch --create "$branch" --base "$base" --no-cd --format json 2>"$errfile" </dev/null) || rc=$?
+  err_tail=
+  [ "$errfile" = /dev/null ] || err_tail=$(tail -n 8 "$errfile" 2>/dev/null | tr -d '\000-\010\013-\037') || err_tail=
+  [ "$errfile" = /dev/null ] || rm -f "$errfile"
+  if [ "$rc" -ne 0 ]; then
+    if [ "$pre_existing" -eq 0 ]; then
+      if [ "$(printf '%s' "$WT_CREATE_JSON" | jq -r '.action // empty' 2>/dev/null)" = created ]; then
+        created_here=1
+      elif git -C "$project" worktree list --porcelain 2>/dev/null | grep -Fxq "branch refs/heads/$branch"; then
+        created_here=1
+      fi
+    fi
+    [ "$created_here" -eq 0 ] || SPAWN_WT_CREATED=1
+    if [ "$rc" -eq 124 ]; then
+      echo "error: wt did not finish creating worktree branch $branch within ${bound}s (a slow pre-start hook? raise FM_SPAWN_WT_CREATE_TIMEOUT)${err_tail:+: $err_tail}" >&2
+    else
+      echo "error: wt could not create worktree branch $branch from $base for project '$project' (exit $rc; a failing user or project pre-start hook leaves the worktree created)${err_tail:+: $err_tail}; if the branch already exists, an earlier spawn of $id left it behind - inspect it with wt list before retrying" >&2
+    fi
+    [ "$created_here" -eq 0 ] || echo "note: the worktree wt created for $branch will be removed (never forced) as this spawn aborts" >&2
+    return 1
+  fi
+  SPAWN_WT_CREATED=1
+  WT_CREATED_PATH=$(printf '%s' "$WT_CREATE_JSON" | jq -r 'select(.action == "created") | .path // empty' 2>/dev/null) || WT_CREATED_PATH=
+  if [ -z "$WT_CREATED_PATH" ] || [ ! -d "$WT_CREATED_PATH" ]; then
+    echo "error: wt reported no created worktree path for $branch (got: ${WT_CREATE_JSON:-nothing}); refusing to launch" >&2
+    return 1
+  fi
+}
+
 spawn_wt_base_ref() { # <project>
   local project=$1 default target
   if ! spawn_worktree_has_origin_config "$project"; then
@@ -3164,6 +3234,7 @@ EOF
     fm_backend_hc_tool_check || exit 1
     SES=$(fm_backend_hc_container_ensure) || exit 1
     T=$(fm_backend_hc_create_task "$SES" "$W" "$PROJ_ABS") || exit 1
+    SPAWN_HC_TERMINAL=$T
     case "$T" in
     t?*) ;;
     *)
@@ -3172,7 +3243,7 @@ EOF
       ;;
     esac
     case "${T#t}" in
-    *[!0-9]*)
+    *[!0123456789abcdef]*)
       echo "error: hc returned a malformed terminal address '$T' for $W" >&2
       exit 1
       ;;
@@ -3223,7 +3294,7 @@ spawn_send_text_line() { # <target> <text>
   zellij) fm_backend_zellij_send_text_line "$1" "$2" "$W" ;;
   orca) fm_backend_orca_send_text_line "$1" "$2" ;;
   cmux) fm_backend_cmux_send_text_line "$1" "$2" "$W" ;;
-  hc) fm_backend_hc_send_text_line "$1" "$2" ;;
+  hc) fm_backend_hc_send_text_line "$1" "$2" "$W" ;;
   esac
 }
 spawn_current_path() { # <target>
@@ -3232,7 +3303,7 @@ spawn_current_path() { # <target>
   herdr) fm_backend_herdr_current_path "$1" ;;
   zellij) fm_backend_zellij_current_path "$1" "$W" ;;
   cmux) fm_backend_cmux_current_path "$1" "$W" ;;
-  hc) fm_backend_hc_current_path "$1" ;;
+  hc) fm_backend_hc_current_path "$1" "$W" ;;
   esac
 }
 spawn_send_literal() { # <target> <text>
@@ -3242,7 +3313,7 @@ spawn_send_literal() { # <target> <text>
   zellij) fm_backend_zellij_send_literal "$1" "$2" "$W" ;;
   orca) fm_backend_orca_send_literal "$1" "$2" ;;
   cmux) fm_backend_cmux_send_literal "$1" "$2" "$W" ;;
-  hc) fm_backend_hc_send_literal "$1" "$2" ;;
+  hc) fm_backend_hc_send_literal "$1" "$2" "$W" ;;
   esac
 }
 spawn_send_key() { # <target> <key>
@@ -3252,7 +3323,7 @@ spawn_send_key() { # <target> <key>
   zellij) fm_backend_zellij_send_key "$1" "$2" "$W" ;;
   orca) fm_backend_orca_send_key "$1" "$2" ;;
   cmux) fm_backend_cmux_send_key "$1" "$2" "$W" ;;
-  hc) fm_backend_hc_send_key "$1" "$2" ;;
+  hc) fm_backend_hc_send_key "$1" "$2" "$W" ;;
   esac
 }
 
@@ -3502,16 +3573,7 @@ elif [ "$KIND" != secondmate ] && [ "$BACKEND" != orca ]; then
     echo "error: wt (Worktrunk) is not installed; it creates every task worktree" >&2
     exit 1
   }
-  WT_CREATE_JSON=$(wt -C "$PROJ_ABS" switch --create "$SPAWN_WT_BRANCH" --base "$SPAWN_WT_BASE" --no-cd --format json 2>/dev/null) || {
-    echo "error: wt could not create worktree branch $SPAWN_WT_BRANCH from $SPAWN_WT_BASE for project '$PROJ_ABS'; if the branch already exists, an earlier spawn of $ID left it behind - inspect it with wt list before retrying" >&2
-    exit 1
-  }
-  SPAWN_WT_CREATED=1
-  WT_CREATED_PATH=$(printf '%s' "$WT_CREATE_JSON" | jq -r 'select(.action == "created") | .path // empty' 2>/dev/null) || WT_CREATED_PATH=
-  if [ -z "$WT_CREATED_PATH" ] || [ ! -d "$WT_CREATED_PATH" ]; then
-    echo "error: wt reported no created worktree path for $SPAWN_WT_BRANCH (got: ${WT_CREATE_JSON:-nothing}); refusing to launch" >&2
-    exit 1
-  fi
+  spawn_wt_create "$PROJ_ABS" "$SPAWN_WT_BRANCH" "$SPAWN_WT_BASE" "$ID" || exit 1
   spawn_send_text_line "$WT_TARGET" "cd $(printf '%q' "$WT_CREATED_PATH")"
 
   # Wait for the pane's cwd to move from the project to the worktree.
