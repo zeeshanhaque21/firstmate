@@ -4,10 +4,11 @@
 # Usage:
 #   fm-home-seed.sh <id> <home|-> {<project>...|--no-projects}
 #       Provision <home> as an isolated firstmate home. If <home> is "-", acquire
-#       a fresh firstmate worktree via "treehouse get --lease", which durably
-#       leases the worktree under the secondmate <id> so the home survives with
-#       no live process and is never recycled until the lease is released with
-#       "treehouse return". Projects are cloned
+#       a Worktrunk worktree of this repository on branch fm-home/<id> via
+#       "wt switch --create". One branch per secondmate id keeps the home durable
+#       with no live process and makes re-seeding idempotent: an existing
+#       worktree for that branch is reused, never duplicated. The home is removed
+#       only by teardown or seed rollback, both through "wt remove". Projects are cloned
 #       from the active home into the secondmate home's projects/ directory.
 #       That project list is non-exclusive provisioning data. Pass --no-projects
 #       instead of a project list to seed a project-less home for a domain whose
@@ -20,8 +21,9 @@
 #       the .fm-secondmate-home identity marker, and data/secondmates.md is updated.
 #       Seeding is transactional: on validation, clone, init, or registry failure,
 #       generated briefs, new homes, new project clones, and registry edits are
-#       rolled back. Treehouse-acquired homes are returned only when the rollback
-#       target is safe; a failed return warns because the lease may still be held.
+#       rolled back. A home this run created is removed with "wt remove" (never
+#       --force) only when the rollback target is safe; a failed removal warns
+#       because the worktree may still exist.
 #       Set FM_SECONDMATE_CHARTER='<charter>' to seed from inline charter text
 #       when no filled charter brief exists. Set FM_SECONDMATE_SCOPE='<scope>'
 #       to override the registry routing scope. Otherwise the registry summary
@@ -387,25 +389,39 @@ seeded_origin_url() {
   normalize_origin_url "$dst" "$url"
 }
 
-acquire_treehouse_home() {
-  local id=$1 home
-  # Durably lease a firstmate worktree from the pool. The lease persists with no
-  # live process and is skipped by later get/prune, so the home survives restarts
-  # until teardown or rollback returns it. treehouse prints only the worktree path
-  # to stdout (banners go to stderr), so command substitution captures the path.
-  home=$(cd "$FM_ROOT" && treehouse get --lease --lease-holder "$id") || {
-    echo "error: treehouse get --lease failed to lease a firstmate home" >&2
+# Acquire the firstmate home for secondmate <id>: a Worktrunk worktree of this
+# repository on branch fm-home/<id>, based on the default branch. Sets
+# WT_HOME_PATH and WT_HOME_CREATED (1 only when this call created the worktree,
+# which is the only case a failed seed may roll back). Called without command
+# substitution so both variables reach the caller.
+WT_HOME_PATH=
+WT_HOME_CREATED=0
+acquire_wt_home() {
+  local id=$1 branch json action
+  branch="fm-home/$id"
+  WT_HOME_PATH=
+  WT_HOME_CREATED=0
+  command -v wt >/dev/null 2>&1 || { echo "error: wt (Worktrunk) is not installed; it creates every secondmate home worktree" >&2; return 1; }
+  command -v jq >/dev/null 2>&1 || { echo "error: jq is required to read wt's worktree report" >&2; return 1; }
+  if git -C "$FM_ROOT" show-ref --verify --quiet "refs/heads/$branch"; then
+    json=$(wt -C "$FM_ROOT" switch "$branch" --no-cd --format json </dev/null 2>/dev/null) || json=
+  else
+    json=$(wt -C "$FM_ROOT" switch --create "$branch" --no-cd --format json </dev/null 2>/dev/null) || json=
+  fi
+  WT_HOME_PATH=$(printf '%s' "$json" | jq -r '.path // empty' 2>/dev/null) || WT_HOME_PATH=
+  action=$(printf '%s' "$json" | jq -r '.action // empty' 2>/dev/null) || action=
+  if [ -z "$WT_HOME_PATH" ] || [ ! -d "$WT_HOME_PATH" ]; then
+    echo "error: wt did not report a firstmate home worktree for branch $branch (got: ${json:-nothing})" >&2
     return 1
-  }
-  [ -n "$home" ] || { echo "error: treehouse get --lease did not report a firstmate home" >&2; return 1; }
-  printf '%s\n' "$home"
+  fi
+  [ "$action" != created ] || WT_HOME_CREATED=1
 }
 
 ensure_home() {
   local id=$1 requested=$2 home
   if [ "$requested" = "-" ]; then
-    home=$(acquire_treehouse_home "$id")
-    verify_firstmate_home "$home"
+    acquire_wt_home "$id" || return 1
+    verify_firstmate_home "$WT_HOME_PATH"
     return
   fi
 
@@ -575,15 +591,15 @@ seed_rollback_target() {
   printf '%s\n' "$abs_target"
 }
 
-seed_return_treehouse_home() {
+seed_remove_acquired_home() {
   local home=$1 abs_home
-  abs_home=$(seed_rollback_target "$home" "treehouse-acquired home") || return 0
-  if ! command -v treehouse >/dev/null 2>&1; then
-    echo "warning: failed to return treehouse-acquired home $abs_home during seed rollback; treehouse command not found" >&2
+  abs_home=$(seed_rollback_target "$home" "acquired home") || return 0
+  if ! command -v wt >/dev/null 2>&1; then
+    echo "warning: failed to remove acquired home $abs_home during seed rollback; wt command not found" >&2
     return 0
   fi
-  ( cd "$FM_ROOT" && treehouse return --force "$abs_home" >/dev/null ) || {
-    echo "warning: failed to return treehouse-acquired home $abs_home during seed rollback; lease may still be held" >&2
+  wt -C "$FM_ROOT" remove "$abs_home" --foreground </dev/null >/dev/null 2>&1 || {
+    echo "warning: failed to remove acquired home $abs_home during seed rollback; the worktree may still exist" >&2
     return 0
   }
 }
@@ -637,7 +653,7 @@ seed_rollback() {
 
   if [ -n "${SEED_HOME:-}" ] && [ "$SEED_HOME" != "/" ]; then
     if [ "$SEED_HOME_ACQUIRED" = 1 ]; then
-      seed_return_treehouse_home "$SEED_HOME"
+      seed_remove_acquired_home "$SEED_HOME"
     elif [ "$SEED_HOME_CREATED" = 1 ]; then
       seed_remove_created_home "$SEED_HOME"
     else
@@ -857,8 +873,9 @@ seed_home() {
   fi
 
   if [ "$requested_home" = "-" ]; then
-    SEED_HOME_ACQUIRED=1
-    home=$(acquire_treehouse_home "$id")
+    acquire_wt_home "$id" || return 1
+    [ "$WT_HOME_CREATED" != 1 ] || SEED_HOME_ACQUIRED=1
+    home=$WT_HOME_PATH
     SEED_HOME="$home"
     home=$(verify_firstmate_home "$home")
   else
