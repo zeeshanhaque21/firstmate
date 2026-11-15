@@ -561,8 +561,8 @@ fm_backend_validate_task_endpoint() {  # <meta-file> <task-id>
         echo "REFUSED: legacy hc endpoint metadata for task $id lacks an exact task binding; preserving task state." >&2
         return 1
       }
-      # The endpoint is the bare local terminal address (t<N>, lowercase hex:
-      # hc hands out t19, t1b, t1c). Any other form,
+      # The endpoint is the bare local terminal address (t<N>, lowercase alphanumeric:
+      # hc hands out t19, t1b, t1h). Any other form,
       # notably a remote <machine>/t<N>, is refused: a task is only ever spawned
       # and cleaned up on this machine's hc server.
       case "$window" in
@@ -570,7 +570,7 @@ fm_backend_validate_task_endpoint() {  # <meta-file> <task-id>
         *) pane= ;;
       esac
       case "$pane" in
-        ''|*[!0123456789abcdef]*)
+        ''|*[!0123456789abcdefghijklmnopqrstuvwxyz]*)
           echo "REFUSED: hc endpoint metadata for task $id is not a local terminal address; preserving task state." >&2
           return 1
           ;;

@@ -7,7 +7,7 @@
 # docs/hc-backend.md owns the setup, the verified findings, and the limits.
 #
 # Identity model: a task is one hc terminal. Its recorded id is the LOCAL address
-# `t<N>` (lowercase hex digits; create_task prints it; every other function
+# `t<N>` (lowercase letters and digits; create_task prints it; every other function
 # takes it as <target>). The terminal is named `fm-<task-id>` and labelled
 # `fm_task=<task-id>`. Remote-machine addresses (`machine/tN`) are refused
 # everywhere: this cut is local-machine only.
@@ -77,7 +77,7 @@ fm_backend_hc_cli() {  # <hc-subcommand-and-args...>
 }
 
 # fm_backend_hc_target_valid: 0 only for a local address `t<N>` where <N> is
-# lowercase hex (observed live: t1b, t1c follow t19). Anything else (empty,
+# lowercase alphanumeric (observed live: t19, t1b, t1h). Anything else (empty,
 # remote `machine/tN`, a name, path-like text) is refused before hc is called,
 # because hc itself resolves names and machine prefixes.
 fm_backend_hc_target_valid() {  # <target>
@@ -86,7 +86,7 @@ fm_backend_hc_target_valid() {  # <target>
     *) return 1 ;;
   esac
   case "${1#t}" in
-    *[!0123456789abcdef]*) return 1 ;;
+    *[!0123456789abcdefghijklmnopqrstuvwxyz]*) return 1 ;;
   esac
   return 0
 }
@@ -144,6 +144,8 @@ fm_backend_hc_verify() {  # <target> [label]
   info=$(fm_backend_hc_get "$target") || rc=$?
   [ "$rc" -eq 0 ] || return "$rc"
   name=$(printf '%s' "$info" | jq -r '.name // empty' 2>/dev/null) || return 1
+  # hc resolves names as well as addresses; the answer must BE the asked address.
+  [ "$(printf '%s' "$info" | jq -r '.address // empty' 2>/dev/null)" = "$target" ] || return 1
   if [ -n "$label" ]; then
     [ "$name" = "$label" ] && { printf '%s' "$info"; return 0; }
   else
@@ -184,7 +186,7 @@ fm_backend_hc_resolve_bare_selector() {  # <name>
   local name=$1 out addr
   out=$(fm_backend_hc_cli ls --json 2>/dev/null) || { echo "error: hc terminal listing failed" >&2; return 1; }
   addr=$(printf '%s' "$out" | jq -r --arg n "$name" \
-    '[.terminals[]? | select(.name == $n and .state == "live" and (.address | test("^t[0-9a-f]+$"))) | .address][0] // empty' 2>/dev/null)
+    '[.terminals[]? | select(.name == $n and .state == "live" and (.address | test("^t[0-9a-z]+$"))) | .address][0] // empty' 2>/dev/null)
   [ -n "$addr" ] || { echo "error: no terminal named $name" >&2; return 1; }
   printf '%s\n' "$addr"
 }
@@ -232,16 +234,42 @@ fm_backend_hc_send_key() {  # <target> <key> <expected-label>
   fm_backend_hc_cli keys "$ref" "$key" >/dev/null 2>&1
 }
 
+# fm_backend_hc_native_status: the terminal's native agent identity and state
+# from `hc get` `.status` ({"app":"pi","state":"idle|working|done|..."}), which
+# hc fills from the harness itself. Prints "<app><TAB><state>"; returns 1 when
+# the terminal cannot be verified (name guard) or read. A terminal with no
+# reported agent prints an empty app.
+fm_backend_hc_native_status() {  # <target> [expected-label]
+  local info
+  info=$(fm_backend_hc_verify "$1" "${2:-}" 2>/dev/null) || return 1
+  printf '%s' "$info" | jq -r '(.status | if type == "object" then [(.app // ""), (.state // "")] else ["", ""] end) | @tsv' 2>/dev/null
+}
+
 # fm_backend_hc_composer_state: thin adapter - plain capture plus a capability
 # descriptor in, shared verdict out (bin/fm-composer-lib.sh owns every shape).
-# `hc read` is plain text with no cursor row and there is no identity probe, so
-# the descriptor is styled=0 cursor=0 identity=0 and the classifier degrades
-# ambiguous rows to `unknown`, which callers treat as "do not assume".
+# `hc read` is plain text with no cursor row, so the descriptor is styled=0
+# cursor=0. identity=1, because hc itself reports the agent's identity and
+# state (fm_backend_hc_native_status): pi draws a BLANK composer between two
+# rules, provable only with an identity that says an idle pi owns the pane, and
+# without it every real pi screen read `unknown`. The probe is fetched lazily,
+# exactly as the herdr and tmux adapters do, and a missing or unreadable probe
+# degrades to `probe-absent`, which keeps the shape `unknown`.
+# NOTE for the capture: hc's screen is the terminal's full height (120 rows
+# for terminals started by `hc run --bg`), top-anchored, so a short TUI leaves
+# the composer at the BOTTOM of mostly blank rows; fm_backend_hc_capture keeps
+# the last <rows> lines, which is where the composer lives.
 fm_backend_hc_composer_state() {  # <target> [expected-label] -> empty|pending|pending-unproven|unknown
-  local cap verdict
+  local cap verdict caps identity
   cap=$(fm_backend_hc_capture "$1" "$FM_COMPOSER_CAPTURE_LINES" "${2:-}") || { printf 'unknown'; return 0; }
-  verdict=$(fm_composer_classify_screen "$(printf 'styled=0\ncursor=0\nidentity=0\nrows=%s\n' "$FM_COMPOSER_CAPTURE_LINES")" "$cap")
-  [ "$verdict" != need-identity ] || verdict=unknown
+  caps=$(printf 'styled=0\ncursor=0\nidentity=1\nrows=%s\n' "$FM_COMPOSER_CAPTURE_LINES")
+  verdict=$(fm_composer_classify_screen "$caps" "$cap")
+  if [ "$verdict" = need-identity ]; then
+    if ! identity=$(fm_backend_hc_native_status "$1" "${2:-}") || [ -z "${identity%%$'\t'*}" ]; then
+      identity=probe-absent
+    fi
+    verdict=$(fm_composer_classify_screen "$caps" "$cap" '' "$identity")
+    [ "$verdict" != need-identity ] || verdict=unknown
+  fi
   printf '%s' "$verdict"
 }
 
@@ -250,23 +278,60 @@ fm_backend_hc_composer_state() {  # <target> [expected-label] -> empty|pending|p
 # still reads proven pending, retry Enter only (`hc keys enter`), never the
 # text, up to <retries> extra Enters. Echoes the proof-carrying verdict
 # vocabulary the other adapters use: empty|pending|pending-unproven|unknown|
-# send-failed. No busy signal exists here, so a pending verdict after the
-# retries is reported as pending rather than converted to a queued Enter.
+# send-failed.
+#
+# Two confirmations come from hc's native agent state, mirroring the tmux
+# core's turn-started and queued-Enter rules (bin/fm-tmux-lib.sh):
+#   - turn started: a harness whose mid-turn screen cannot be classified (pi
+#     replaces its composer rule with a `Working` spinner) reads `unknown`
+#     right after a successful submit. When and only when the native state was
+#     idle or done BEFORE the text was typed, a later `working` state is proof
+#     the submission was accepted, so the verdict is `empty`; polled across the
+#     retry budget because the turn takes a beat to start. Without that
+#     baseline (already working, or no native state) `unknown` stays `unknown`.
+#   - queued Enter: a proven-pending composer that survives the Enter retries
+#     while the native state is `working` means the Enter was accepted and
+#     queued (fm_composer_queued_enter_verdict).
 # `hc send` refuses a program that is blocked on a dialog (no --force); that
 # surfaces as send-failed, and so does a name-guard refusal (nothing was typed).
 fm_backend_hc_send_text_submit() {  # <target> <text> <retries> <enter-sleep> <settle> <expected-label>
-  local target=$1 text=$2 retries=${3:-3} sleep_s=${4:-1} settle=${5:-0} label=${6:-} i=0 state ref
+  local target=$1 text=$2 retries=${3:-3} sleep_s=${4:-1} settle=${5:-0} label=${6:-} i=0 j state ref
+  local baseline_idle='' native native_state
   fm_backend_hc_target_valid "$target" || { printf 'unknown'; return 0; }
   ref=$(fm_backend_hc_ref "$target" "$label" act) || { printf 'send-failed'; return 0; }
+  native=$(fm_backend_hc_native_status "$target" "$label") || native=
+  case "${native#*$'\t'}" in idle|done) baseline_idle=1 ;; esac
   fm_backend_hc_cli send "$ref" -- "$text" >/dev/null 2>&1 || { printf 'send-failed'; return 0; }
   sleep "$settle"
   while :; do
     state=$(fm_backend_hc_composer_state "$target" "$label")
     case "$state" in
       pending|pending-unproven) ;;
+      unknown)
+        if [ -n "$baseline_idle" ]; then
+          j=0
+          while [ "$j" -lt "$retries" ]; do
+            native=$(fm_backend_hc_native_status "$target" "$label") || native=
+            if [ "${native#*$'\t'}" = working ]; then
+              printf 'empty'
+              return 0
+            fi
+            j=$((j + 1))
+            [ "$j" -ge "$retries" ] || sleep "$sleep_s"
+          done
+        fi
+        printf 'unknown'
+        return 0
+        ;;
       *) printf '%s' "$state"; return 0 ;;
     esac
-    [ "$i" -lt "$retries" ] || { printf '%s' "$state"; return 0; }
+    if [ "$i" -ge "$retries" ]; then
+      native=$(fm_backend_hc_native_status "$target" "$label") || native=
+      native_state=idle
+      [ "${native#*$'\t'}" != working ] || native_state=busy
+      fm_composer_queued_enter_verdict "$state" "$native_state"
+      return 0
+    fi
     i=$((i + 1))
     fm_backend_hc_send_key "$target" Enter "$label" || true
     sleep "$sleep_s"

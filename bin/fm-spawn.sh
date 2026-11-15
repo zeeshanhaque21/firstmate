@@ -2794,7 +2794,7 @@ spawn_wt_create() { # <project> <branch> <base> <id>
     if [ "$rc" -eq 124 ]; then
       echo "error: wt did not finish creating worktree branch $branch within ${bound}s (a slow pre-start hook? raise FM_SPAWN_WT_CREATE_TIMEOUT)${err_tail:+: $err_tail}" >&2
     else
-      echo "error: wt could not create worktree branch $branch from $base for project '$project' (exit $rc; a failing user or project pre-start hook leaves the worktree created)${err_tail:+: $err_tail}; if the branch already exists, an earlier spawn of $id left it behind - inspect it with wt list before retrying" >&2
+      echo "error: wt could not create worktree branch $branch from $base for project '$project' (wt exit $rc)${err_tail:+: $err_tail}. If a pre-start hook failed, wt had already created the worktree and this spawn removes it; if the branch already exists, an earlier spawn of $id left it behind - inspect it with wt list before retrying" >&2
     fi
     [ "$created_here" -eq 0 ] || echo "note: the worktree wt created for $branch will be removed (never forced) as this spawn aborts" >&2
     return 1
@@ -3243,7 +3243,7 @@ EOF
       ;;
     esac
     case "${T#t}" in
-    *[!0123456789abcdef]*)
+    *[!0123456789abcdefghijklmnopqrstuvwxyz]*)
       echo "error: hc returned a malformed terminal address '$T' for $W" >&2
       exit 1
       ;;

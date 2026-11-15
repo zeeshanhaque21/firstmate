@@ -25,6 +25,8 @@ mkdir -p "$FAKEBIN" "$FM_HC_RESP"
 #   ls.json / ls.exit run.json / run.exit   likewise for `ls` and `run`
 #   read.<addr>[.<n>] screen text for the nth read of <addr>, else read.<addr>
 #   <cmd>.exit        exit code for send/keys/kill/rm (default 0)
+#   onsend.<file>     copied over <file> after each `send` (state that flips
+#                     when text lands)
 cat > "$FAKEBIN/herdr-core" <<'SH'
 #!/usr/bin/env bash
 set -u
@@ -62,7 +64,17 @@ case "$cmd" in
     else echo '{"error":{"kind":"not_found"}}' >&2; exit 3; fi
     exit 0
     ;;
-  send|keys|kill|rm) exit "$(code_of "$cmd")" ;;
+  send|keys|kill|rm)
+    # onsend.<file> replaces <file> after a `send`: stages state that changes
+    # when the text lands (a pi turning from idle to working).
+    if [ "$cmd" = send ]; then
+      for f in "$R"/onsend.*; do
+        [ -f "$f" ] || continue
+        cp "$f" "$R/${f##*/onsend.}"
+      done
+    fi
+    exit "$(code_of "$cmd")"
+    ;;
   *) exit 64 ;;
 esac
 SH
@@ -90,6 +102,10 @@ get_json() {  # <addr> <name> <state> <fg-json>
   printf '{"address":"%s","name":"%s","state":"%s","cwd":"/frozen","foreground":%s}\n' "$1" "$2" "$3" "$4" > "$FM_HC_RESP/get.$1"
   # hc also resolves a terminal by its (unique) name; the shim mirrors that.
   [ -z "$2" ] || cp "$FM_HC_RESP/get.$1" "$FM_HC_RESP/get.$2"
+}
+get_json_status() {  # <addr> <name> <state> <fg-json> <status-json> [outfile]
+  local out=${6:-$FM_HC_RESP/get.$1}
+  printf '{"address":"%s","name":"%s","state":"%s","cwd":"/frozen","foreground":%s,"status":%s}\n' "$1" "$2" "$3" "$4" "$5" > "$out"
 }
 get_json_unnamed() {  # <addr> <state> <fg-json> - real hc reports "name":null
   printf '{"address":"%s","name":null,"state":"%s","cwd":"/frozen","foreground":%s}\n' "$1" "$2" "$3" > "$FM_HC_RESP/get.$1"
@@ -137,11 +153,11 @@ test_bin_lookup() {
 
 test_target_valid() {
   local ok bad
-  for ok in t0 t7 t12345 t1b t1c tff t0a9; do fm_backend_hc_target_valid "$ok" || fail "target_valid rejected $ok"; done
-  for bad in '' t T7 t7x tt7 omarchy/t7 t7/ ../x 'fm-x' ' t7' 't 7' 't7;x' tG1 t1B 'fm-abc' 'name'; do
+  for ok in t0 t7 t12345 t1b t1h tzz t0a9; do fm_backend_hc_target_valid "$ok" || fail "target_valid rejected $ok"; done
+  for bad in '' t T7 t7X omarchy/t7 t7/ ../x 'fm-x' ' t7' 't 7' 't7;x' tG1 t1B 't-1' 'fm-abc' 'name'; do
     if fm_backend_hc_target_valid "$bad"; then fail "target_valid accepted '$bad'"; fi
   done
-  pass "target_valid accepts only local tN addresses (lowercase hex, as hc hands out t1b)"
+  pass "target_valid accepts only local tN addresses (lowercase alphanumeric, as hc hands out t1h)"
 }
 
 test_create_task_success_passes_safe_flags() {
@@ -204,7 +220,7 @@ test_create_task_refuses_bad_results_and_inputs() {
 test_kill_refuses_non_local_addresses_before_calling_hc() {
   local bad rc
   reset
-  for bad in t7/../x omarchy/t7 '' t 'name' 't7x' '../x'; do
+  for bad in t7/../x omarchy/t7 '' t 'name' 't7;x' '../x'; do
     rc=0; fm_backend_hc_kill "$bad" >/dev/null 2>&1 || rc=$?
     [ "$rc" -ne 0 ] || fail "kill must refuse '$bad'"
   done
@@ -546,6 +562,88 @@ test_send_text_submit_types_once_and_retries_enter_only() {
   pass "send_text_submit types once, retries Enter only, returns the shared verdicts"
 }
 
+PI_FIXTURES="$ROOT/tests/assets/hc-pi"
+PI_IDLE='{"app":"pi","state":"idle"}'
+PI_WORKING='{"app":"pi","state":"working"}'
+
+# stage_pi <screen-fixture> <status-json>: the terminal t8/fm-abc shows a real
+# pi screen (captured from a live pi in an hc terminal, scrubbed above the
+# composer) and hc reports <status-json>.
+stage_pi() {
+  reset
+  get_json_status t8 fm-abc live "$PI_FG" "$2"
+  cp "$FM_HC_RESP/get.t8" "$FM_HC_RESP/get.fm-abc"
+  cp "$PI_FIXTURES/$1.screen" "$FM_HC_RESP/read.fm-abc"
+}
+
+# M4: every real pi screen read `unknown` on hc because the adapter declared no
+# agent identity, and pi's blank composer between two rules is provable only
+# with one. hc reports it natively in `hc get` `.status`.
+test_pi_composer_states_from_real_screens() {
+  local got
+  stage_pi idle "$PI_IDLE"
+  got=$(fm_backend_hc_composer_state t8 fm-abc)
+  [ "$got" = empty ] || fail "M4: idle pi screen should be empty, got '$got'"
+  stage_pi idle '{"app":"pi","state":"done"}'
+  [ "$(fm_backend_hc_composer_state t8 fm-abc)" = empty ] || fail "M4: a done pi with an empty composer should be empty"
+  stage_pi draft "$PI_IDLE"
+  got=$(fm_backend_hc_composer_state t8 fm-abc)
+  [ "$got" = pending ] || fail "M4: pi screen with typed text should be pending, got '$got'"
+  stage_pi draft "$PI_WORKING"
+  got=$(fm_backend_hc_composer_state t8 fm-abc)
+  [ "$got" = pending ] || fail "M4: typed text is pending whatever the agent state, got '$got'"
+  stage_pi busy "$PI_WORKING"
+  got=$(fm_backend_hc_composer_state t8 fm-abc)
+  [ "$got" = unknown ] || fail "M4: a working pi's mid-turn screen is not provably empty, got '$got'"
+  # No identity (no .status, or a non-pi app, or a blocked pi): the blank shape stays unknown.
+  stage_pi idle null
+  [ "$(fm_backend_hc_composer_state t8 fm-abc)" = unknown ] || fail "no native status must keep the blank pi composer unknown"
+  stage_pi idle '{"app":"zsh","state":"idle"}'
+  [ "$(fm_backend_hc_composer_state t8 fm-abc)" = unknown ] || fail "a non-pi app must keep the blank pi composer unknown"
+  stage_pi idle '{"app":"pi","state":"blocked"}'
+  [ "$(fm_backend_hc_composer_state t8 fm-abc)" = unknown ] || fail "a blocked pi must not read empty"
+  pass "M4: real pi screens classify empty (idle/done), pending (draft), unknown (working/no identity)"
+}
+
+# A send to an idle pi turns the pane into a working pi at once; the delivery is
+# acknowledged by the native idle-to-working transition, never by retyping.
+test_pi_submit_confirmed_by_turn_started() {
+  local v
+  stage_pi idle "$PI_IDLE"
+  get_json_status t8 fm-abc live "$PI_FG" "$PI_WORKING" "$FM_HC_RESP/onsend.get.t8"
+  cp "$FM_HC_RESP/onsend.get.t8" "$FM_HC_RESP/onsend.get.fm-abc"
+  cp "$PI_FIXTURES/busy.screen" "$FM_HC_RESP/onsend.read.fm-abc"
+  v=$(fm_backend_hc_send_text_submit t8 'do the thing' 3 0 0 fm-abc)
+  [ "$v" = empty ] || fail "M4: a send that started a pi turn must confirm as empty, got '$v'"
+  [ "$(log_count send)" = 1 ] && [ "$(log_count keys)" = 0 ] || fail "M4: text typed once, no blind Enter: $(tr '\037' ' ' < "$FM_HC_LOG")"
+  # Already working BEFORE the text: no transition evidence, so unknown is kept.
+  stage_pi busy "$PI_WORKING"
+  v=$(fm_backend_hc_send_text_submit t8 'do the thing' 2 0 0 fm-abc)
+  [ "$v" = unknown ] || fail "M4: no idle baseline must keep unknown, got '$v'"
+  # A pi that never starts (idle before and after, blank composer) stays unconfirmed.
+  stage_pi idle "$PI_IDLE"
+  v=$(fm_backend_hc_send_text_submit t8 'do the thing' 2 0 0 fm-abc)
+  [ "$v" = empty ] || fail "an idle pi with a cleared composer reads empty, got '$v'"
+  stage_pi idle null
+  v=$(fm_backend_hc_send_text_submit t8 'do the thing' 2 0 0 fm-abc)
+  [ "$v" = unknown ] || fail "no identity and no transition must stay unknown, got '$v'"
+  [ "$(log_count keys)" = 0 ] || fail "unknown must never get a blind Enter"
+  pass "M4: a pi send is confirmed by the native idle-to-working transition, only from an idle baseline"
+}
+
+# Enter accepted but queued behind a running turn: pending composer + working.
+test_pi_queued_enter_reads_empty_only_while_working() {
+  local v
+  stage_pi draft "$PI_WORKING"
+  v=$(fm_backend_hc_send_text_submit t8 'queued' 2 0 0 fm-abc)
+  [ "$v" = empty ] || fail "pending composer while the agent works is a queued Enter, got '$v'"
+  [ "$(log_count send)" = 1 ] || fail "never retype"
+  stage_pi draft "$PI_IDLE"
+  v=$(fm_backend_hc_send_text_submit t8 'swallowed' 2 0 0 fm-abc)
+  [ "$v" = pending ] || fail "pending composer on an idle agent is a genuine swallow, got '$v'"
+  pass "queued Enter is empty only while hc reports the agent working"
+}
+
 test_misc_contracts() {
   local out
   [ "$(fm_backend_hc_container_ensure)" = hc ] || fail "container_ensure should print hc"
@@ -573,4 +671,7 @@ test_agent_state_real_wrapped_process_group
 test_target_exists
 test_send_text_line_and_literal
 test_send_text_submit_types_once_and_retries_enter_only
+test_pi_composer_states_from_real_screens
+test_pi_submit_confirmed_by_turn_started
+test_pi_queued_enter_reads_empty_only_while_working
 test_misc_contracts
