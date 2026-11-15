@@ -36,6 +36,12 @@ fm_git_identity fmtest fmtest@example.invalid
 # shellcheck source=/dev/null
 . "$ROOT/bin/fm-backend.sh"
 
+# An hc terminal (the captain's own session) exports HC_TERMINAL_ID, which
+# fm_backend_detect treats as a runtime marker. Clear the ambient hc markers so
+# every assertion below that expects no detection, or tmux by default, stays
+# deterministic wherever this suite runs; the hc cases set them explicitly.
+unset HC_TERMINAL_ID HC_TERMINAL_SOCKET HC_SCOPE
+
 TMP_ROOT=$(fm_test_tmproot fm-backend-tests)
 # A claude spawn writes workspace trust into the launching user's own store,
 # and the script resolves it as ${CLAUDE_CONFIG_DIR:-${HOME:-}}, so the value
@@ -535,6 +541,151 @@ test_backend_validate_spawn_accepts_orca() {
   out=$(fm_backend_validate_spawn "tmux herdr" 2>&1) && fail "fm_backend_validate_spawn should refuse a multi-token backend name"
   assert_contains "$out" "unknown backend 'tmux herdr'" "fm_backend_validate_spawn accepted a multi-token backend name"
   pass "fm_backend_validate_spawn: all implemented lifecycle backends are spawn-supported"
+}
+
+# --- hc backend wiring ------------------------------------------------------
+
+test_hc_known_validated_and_required_tools() {
+  local out dir="$TMP_ROOT/hc-tools"
+  fm_backend_is_known hc || fail "fm_backend_is_known should accept hc"
+  fm_backend_validate hc 2>/dev/null || fail "fm_backend_validate should accept hc"
+  fm_backend_validate_spawn hc 2>/dev/null || fail "fm_backend_validate_spawn should accept hc"
+  out=$(fm_backend_required_tools hc) || fail "fm_backend_required_tools should know hc"
+  assert_equals 'herdr-core jq' "$out" "hc requires exactly herdr-core and jq (worktrees come from wt)"
+  assert_not_contains "$out" treehouse "hc must not list treehouse"
+
+  mkdir -p "$dir/with" "$dir/without"
+  printf '#!/bin/sh\nexit 0\n' > "$dir/with/herdr-core"
+  printf '#!/bin/sh\nexit 0\n' > "$dir/with/jq"
+  chmod +x "$dir/with/herdr-core" "$dir/with/jq"
+  # The library is sourced with the real PATH first (it shells out to dirname),
+  # then PATH is narrowed to a fake dir so `command -v herdr-core` is hermetic
+  # even on a host that has the real binary installed.
+  bash -c ". '$ROOT/bin/fm-backend.sh'; PATH='$dir/with'; fm_backend_required_tool_available hc herdr-core" \
+    || fail "herdr-core on PATH should satisfy the hc tool check"
+  bash -c ". '$ROOT/bin/fm-backend.sh'; PATH='$dir/without'; fm_backend_required_tool_available hc herdr-core" \
+    && fail "a missing herdr-core must fail the hc tool check"
+  bash -c ". '$ROOT/bin/fm-backend.sh'; PATH='$dir/with'; fm_backend_required_tool_available hc treehouse" \
+    && fail "treehouse is not an hc tool"
+  pass "hc: known, validate and validate_spawn accept it; required tools are exactly 'herdr-core jq'"
+}
+
+test_hc_detect_precedence() {
+  local out cfg="$TMP_ROOT/hc-detect-config" errfile="$TMP_ROOT/hc-detect.err"
+  mkdir -p "$cfg"
+
+  out=$(unset TMUX HERDR_ENV CMUX_WORKSPACE_ID __CFBundleIdentifier; PATH="$FAKE_NONDARWIN_BIN:$PATH" HC_TERMINAL_ID=t5 fm_backend_detect) \
+    || fail "fm_backend_detect should succeed when HC_TERMINAL_ID is set"
+  assert_equals hc "$out" "HC_TERMINAL_ID alone should select hc"
+
+  # Direct (non-substitution) call so the signal global survives.
+  (unset TMUX HERDR_ENV CMUX_WORKSPACE_ID __CFBundleIdentifier
+    PATH="$FAKE_NONDARWIN_BIN:$PATH" HC_TERMINAL_ID=t5 fm_backend_detect >/dev/null \
+      && [ "$FM_BACKEND_DETECT_SIGNAL" = HC_TERMINAL_ID ]) \
+    || fail "the hc detection signal should be named HC_TERMINAL_ID"
+
+  if out=$(unset TMUX HERDR_ENV CMUX_WORKSPACE_ID __CFBundleIdentifier HC_TERMINAL_ID; PATH="$FAKE_NONDARWIN_BIN:$PATH" fm_backend_detect); then
+    fail "fm_backend_detect should be undetected with HC_TERMINAL_ID unset, got '$out'"
+  fi
+  if out=$(unset TMUX HERDR_ENV CMUX_WORKSPACE_ID __CFBundleIdentifier; PATH="$FAKE_NONDARWIN_BIN:$PATH" HC_TERMINAL_ID='' fm_backend_detect); then
+    fail "an empty HC_TERMINAL_ID must not select hc, got '$out'"
+  fi
+
+  # Innermost-first: tmux or herdr started inside an hc terminal inherits
+  # HC_TERMINAL_ID, so their own marker wins; hc wins over the outer cmux app.
+  out=$(unset HERDR_ENV CMUX_WORKSPACE_ID; TMUX='fake,1,0' HC_TERMINAL_ID=t5 fm_backend_detect)
+  assert_equals tmux "$out" "TMUX must win over HC_TERMINAL_ID (tmux inside an hc terminal)"
+  out=$(unset TMUX CMUX_WORKSPACE_ID; HERDR_ENV=1 HC_TERMINAL_ID=t5 fm_backend_detect)
+  assert_equals herdr "$out" "HERDR_ENV=1 must win over HC_TERMINAL_ID (herdr inside an hc terminal)"
+  out=$(unset TMUX HERDR_ENV; CMUX_WORKSPACE_ID='fake-uuid' HC_TERMINAL_ID=t5 fm_backend_detect)
+  assert_equals hc "$out" "HC_TERMINAL_ID must win over cmux (hc terminal attached from a cmux tab)"
+  out=$(TMUX='fake,1,0' HERDR_ENV=1 CMUX_WORKSPACE_ID='fake-uuid' HC_TERMINAL_ID=t5 fm_backend_detect)
+  assert_equals tmux "$out" "with every marker present tmux wins"
+
+  # fm_backend_name: auto-detected hc is loud; an explicit setting always wins.
+  out=$(unset TMUX HERDR_ENV CMUX_WORKSPACE_ID __CFBundleIdentifier; PATH="$FAKE_NONDARWIN_BIN:$PATH" HC_TERMINAL_ID=t5 FM_BACKEND='' FM_BACKEND_CONFIG_DIR="$cfg" fm_backend_name 2>"$errfile")
+  assert_equals hc "$out" "fm_backend_name should auto-detect hc from HC_TERMINAL_ID"
+  assert_contains "$(cat "$errfile")" "NOTICE: auto-detected hc runtime (HC_TERMINAL_ID=t5)" "auto-detected hc must print a notice"
+  out=$(unset TMUX HERDR_ENV CMUX_WORKSPACE_ID; HC_TERMINAL_ID=t5 FM_BACKEND=tmux FM_BACKEND_CONFIG_DIR="$cfg" fm_backend_name 2>"$errfile")
+  assert_equals tmux "$out" "FM_BACKEND=tmux must win over an ambient HC_TERMINAL_ID"
+  [ ! -s "$errfile" ] || fail "an explicit backend must not print the auto-detect notice"
+  printf 'hc\n' > "$cfg/backend"
+  out=$(unset TMUX HERDR_ENV CMUX_WORKSPACE_ID HC_TERMINAL_ID; FM_BACKEND='' FM_BACKEND_CONFIG_DIR="$cfg" fm_backend_name 2>"$errfile")
+  assert_equals hc "$out" "config/backend=hc selects hc without any marker"
+  [ ! -s "$errfile" ] || fail "config/backend=hc must not print the auto-detect notice"
+  rm -f "$cfg/backend"
+  pass "hc: HC_TERMINAL_ID selects hc after tmux and herdr and before cmux; auto-detect is loud; explicit settings win"
+}
+
+test_hc_validate_task_endpoint() {
+  local dir="$TMP_ROOT/hc-endpoint" out meta
+  mkdir -p "$dir"
+  meta="$dir/hc1.meta"
+
+  fm_write_meta "$meta" window=t7 endpoint_task_id=hc1 worktree=/wt/hc1 project=/proj backend=hc
+  out=$(fm_backend_validate_task_endpoint "$meta" hc1 2>&1) || fail "a bound local hc address should validate: $out"
+  FM_BACKEND_VALIDATED_BACKEND='' FM_BACKEND_VALIDATED_TARGET=''
+  fm_backend_validate_task_endpoint "$meta" hc1 2>/dev/null || fail "a bound local hc address should validate"
+  assert_equals hc "$FM_BACKEND_VALIDATED_BACKEND" "validated backend"
+  assert_equals t7 "$FM_BACKEND_VALIDATED_TARGET" "validated target is the bare address"
+
+  fm_write_meta "$meta" window=t7/x endpoint_task_id=hc1 worktree=/wt/hc1 project=/proj backend=hc
+  out=$(fm_backend_validate_task_endpoint "$meta" hc1 2>&1) && fail "t7/x must be refused"
+  assert_contains "$out" "REFUSED: hc endpoint metadata for task hc1 is not a local terminal address" "t7/x refusal message"
+
+  fm_write_meta "$meta" window=omarchy/t7 endpoint_task_id=hc1 worktree=/wt/hc1 project=/proj backend=hc
+  out=$(fm_backend_validate_task_endpoint "$meta" hc1 2>&1) && fail "a remote address must be refused"
+  assert_contains "$out" "not a local terminal address" "remote address refusal message"
+
+  local bad
+  for bad in t tt t7a 7 fm-hc1 ' t7' 't7 '; do
+    fm_write_meta "$meta" "window=$bad" endpoint_task_id=hc1 worktree=/wt/hc1 project=/proj backend=hc
+    out=$(fm_backend_validate_task_endpoint "$meta" hc1 2>&1) && fail "hc window '$bad' must be refused"
+  done
+
+  fm_write_meta "$meta" window=t7 worktree=/wt/hc1 project=/proj backend=hc
+  out=$(fm_backend_validate_task_endpoint "$meta" hc1 2>&1) && fail "a missing binding must be refused"
+  assert_contains "$out" "lacks an exact task binding" "missing binding refusal message"
+
+  fm_write_meta "$meta" window=t7 endpoint_task_id=other worktree=/wt/hc1 project=/proj backend=hc
+  out=$(fm_backend_validate_task_endpoint "$meta" hc1 2>&1) && fail "a binding for another task must be refused"
+  assert_contains "$out" "belongs to task other, not hc1" "foreign binding refusal message"
+  pass "hc: task endpoint validation accepts a bound local t<N> and refuses remote, malformed, unbound, and foreign records"
+}
+
+test_hc_dispatch_routes_to_adapter() {
+  local out rc
+  # _FM_BACKEND_HC_SOURCED=1 makes fm_backend_source skip the real adapter, so
+  # these stubs prove the dispatcher's own routing, argument passthrough, and
+  # the generic (tmux-like) defaults for the surfaces hc does not provide.
+  # shellcheck disable=SC2329 # the stubs are invoked indirectly through the dispatcher
+  out=$(
+    _FM_BACKEND_HC_SOURCED=1
+    fm_backend_hc_capture() { printf 'capture:%s' "$*"; }
+    fm_backend_hc_send_key() { printf 'key:%s' "$*"; }
+    fm_backend_hc_send_text_submit() { printf 'submit:%s' "$*"; }
+    fm_backend_hc_kill() { printf 'kill:%s' "$*"; }
+    fm_backend_hc_composer_state() { printf 'composer:%s' "$*"; }
+    fm_backend_hc_target_exists() { printf 'exists:%s\n' "$*" >&2; return 0; }
+    fm_backend_hc_agent_state() { printf 'dead'; }
+    printf '%s|' "$(fm_backend_capture hc t7 40 fm-x)" "$(fm_backend_send_key hc t7 Enter fm-x)" \
+      "$(fm_backend_send_text_submit hc t7 hello 3 1 0 fm-x)" "$(fm_backend_kill hc t7 '' fm-x)" \
+      "$(fm_backend_composer_state hc t7 fm-x)" "$(fm_backend_agent_state hc t7)" "$(fm_backend_agent_alive hc t7)" \
+      "$(fm_backend_busy_state hc t7)"
+    fm_backend_target_exists hc t7 fm-x 2>/dev/null && printf 'exists-ok|'
+    fm_backend_has_push hc || printf 'nopush|'
+    fm_backend_events_capable hc s || printf 'noevents|'
+    fm_backend_wait_transition hc s 1 "$TMP_ROOT" t7; printf 'wait=%s|' "$?"
+    fm_backend_clear_transition hc "$TMP_ROOT" t7 && printf 'clear-ok|'
+  ) || fail "hc dispatch stub run failed"
+  assert_equals 'capture:t7 40 fm-x|key:t7 Enter fm-x|submit:t7 hello 3 1 0 fm-x|kill:t7  fm-x|composer:t7 fm-x|dead|dead|unknown|exists-ok|nopush|noevents|wait=2|clear-ok|' "$out" \
+    "hc operations must route to fm_backend_hc_* with their arguments, and hc must get tmux's generic busy/event defaults"
+
+  # An hc selector inherits its backend from meta, and the real adapter loads.
+  rc=0
+  bash -c "cd '$ROOT' && source bin/fm-backend.sh && fm_backend_source hc && declare -F fm_backend_hc_capture >/dev/null && declare -F fm_backend_hc_agent_state >/dev/null" 2>/dev/null || rc=$?
+  expect_code 0 "$rc" "fm_backend_source hc should load bin/backends/hc.sh"
+  pass "hc: dispatcher routes capture/key/submit/kill/composer/exists/agent_state to fm_backend_hc_*; busy and events use the generic defaults; the adapter lazy-loads"
 }
 
 test_meta_get_and_backend_of_meta() {
@@ -1149,6 +1300,10 @@ test_backend_name_explicit_beats_detection
 test_backend_validate_refuses_unknown
 test_backend_source_shell_portable
 test_backend_validate_spawn_accepts_orca
+test_hc_known_validated_and_required_tools
+test_hc_detect_precedence
+test_hc_validate_task_endpoint
+test_hc_dispatch_routes_to_adapter
 test_meta_get_and_backend_of_meta
 test_resolve_selector_three_forms
 test_backend_of_selector_matches_explicit_target_meta

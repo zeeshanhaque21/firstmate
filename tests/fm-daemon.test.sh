@@ -2588,12 +2588,19 @@ test_discover_supervisor_backend_precedence() {
   out=$(FM_SUPERVISOR_BACKEND='' TMUX_PANE='' HERDR_ENV=1 HERDR_PANE_ID=w1:p1 discover_supervisor_backend)
   [ "$out" = herdr ] || fail "HERDR_ENV=1 with HERDR_PANE_ID present should resolve to herdr: $out"
 
-  if out=$(FM_SUPERVISOR_BACKEND='' TMUX_PANE='' HERDR_ENV='' HERDR_PANE_ID='' discover_supervisor_backend); then
-    fail "bare fallback (no override, no TMUX_PANE, no HERDR_ENV) should return non-zero"
+  out=$(FM_SUPERVISOR_BACKEND='' TMUX_PANE='' HERDR_ENV='' HERDR_PANE_ID='' HC_TERMINAL_ID=t5 discover_supervisor_backend) \
+    || fail "HC_TERMINAL_ID alone should resolve cleanly to hc"
+  [ "$out" = hc ] || fail "HC_TERMINAL_ID alone should resolve to hc so the daemon refuses it by name: $out"
+
+  out=$(FM_SUPERVISOR_BACKEND='' TMUX_PANE='%9' HERDR_ENV='' HERDR_PANE_ID='' HC_TERMINAL_ID=t5 discover_supervisor_backend)
+  [ "$out" = tmux ] || fail "TMUX_PANE should win over HC_TERMINAL_ID (tmux inside an hc terminal): $out"
+
+  if out=$(FM_SUPERVISOR_BACKEND='' TMUX_PANE='' HERDR_ENV='' HERDR_PANE_ID='' HC_TERMINAL_ID='' discover_supervisor_backend); then
+    fail "bare fallback (no override, no TMUX_PANE, no HERDR_ENV, no HC_TERMINAL_ID) should return non-zero"
   fi
   [ "$out" = tmux ] || fail "bare fallback should still print tmux: $out"
 
-  pass "discover_supervisor_backend: override > TMUX_PANE > HERDR_ENV+HERDR_PANE_ID > tmux fallback"
+  pass "discover_supervisor_backend: override > TMUX_PANE > HERDR_ENV+HERDR_PANE_ID > HC_TERMINAL_ID (hc) > tmux fallback"
 }
 
 test_discover_supervisor_target_herdr() {
@@ -2610,7 +2617,11 @@ test_discover_supervisor_target_herdr() {
   out=$(FM_SUPERVISOR_TARGET='' TMUX_PANE='' HERDR_ENV=1 HERDR_PANE_ID=w1:p9 HERDR_SESSION=iso1 discover_supervisor_target)
   [ "$out" = "iso1:w1:p9" ] || fail "herdr target should use an explicit HERDR_SESSION: $out"
 
-  if out=$(FM_SUPERVISOR_TARGET='' TMUX_PANE='' HERDR_ENV='' HERDR_PANE_ID='' discover_supervisor_target); then
+  out=$(FM_SUPERVISOR_TARGET='' TMUX_PANE='' HERDR_ENV='' HERDR_PANE_ID='' HC_TERMINAL_ID=t5 discover_supervisor_target) \
+    || fail "an hc terminal address should resolve cleanly"
+  [ "$out" = t5 ] || fail "an hc terminal should resolve to its own t<N> address: $out"
+
+  if out=$(FM_SUPERVISOR_TARGET='' TMUX_PANE='' HERDR_ENV='' HERDR_PANE_ID='' HC_TERMINAL_ID='' discover_supervisor_target); then
     fail "bare fallback should return non-zero"
   fi
   [ "$out" = "firstmate:0" ] || fail "bare fallback should still print firstmate:0: $out"

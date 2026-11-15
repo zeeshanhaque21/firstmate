@@ -33,6 +33,13 @@ FM_TEST_LIB_SOURCED=1
 # suite's fixtures were written against.
 umask 022
 
+# A suite run from inside an hc terminal inherits HC_TERMINAL_ID, which
+# bin/fm-backend.sh's fm_backend_detect reads as the runtime marker for the hc
+# backend. Left set, every fixture spawn that names no backend would address
+# the captain's live hc server instead of its fake tmux. Clear the markers for
+# every suite; a case that needs hc sets HC_TERMINAL_ID itself.
+unset HC_TERMINAL_ID HC_TERMINAL_SOCKET HC_SCOPE
+
 # Fixture Git isolation for every suite that reaches this library; the helper's
 # header owns the invariant and the layers it deliberately leaves in force.
 # shellcheck source=tests/git-config-helpers.sh
