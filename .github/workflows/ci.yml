@@ -256,20 +256,20 @@ jobs:
           set -eu
           bin/fm-install-herdr.sh "$RUNNER_TEMP/bin"
           echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
-      - name: Install pinned Treehouse
+      - name: Install pinned Worktrunk
         run: |
           set -eu
-          # Several real-herdr-gated E2E scripts require treehouse for spawn
+          # Several real-herdr-gated E2E scripts require wt for spawn
           # worktree acquisition (presentation, workspace-per-home, autodetect).
-          bin/fm-install-treehouse.sh "$RUNNER_TEMP/bin"
+          bin/fm-install-wt.sh "$RUNNER_TEMP/bin"
           echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
       - name: Assert Herdr pin and protocol floor
         run: |
           set -eu
           command -v herdr >/dev/null || { echo "::error::herdr not on PATH after install"; exit 1; }
-          command -v treehouse >/dev/null || { echo "::error::treehouse not on PATH after install"; exit 1; }
+          command -v wt >/dev/null || { echo "::error::wt not on PATH after install"; exit 1; }
           herdr --version
-          treehouse --version
+          wt --version
           status=$(herdr status --json)
           printf '%s\n' "$status"
           version=$(printf '%s' "$status" | jq -r '.client.version // empty')
