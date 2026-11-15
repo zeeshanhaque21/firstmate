@@ -329,19 +329,19 @@ fm_backend_validate_spawn() {  # <name>
 #   - jq, for the JSON-emitting experimental adapters (herdr, zellij, cmux, hc) whose
 #     spawn/liveness paths parse the backend's JSON output (see each adapter's
 #     tool check, e.g. fm_backend_herdr_tool_check);
-#   - the treehouse worktree provider for every session-provider-only backend
-#     (tmux, herdr, zellij, cmux); orca owns its own task worktree and terminal,
-#     so it drops both treehouse and any other backend's session CLI. hc lists
-#     no worktree provider: its task worktrees are created by `wt`.
+#   - wt (Worktrunk), the worktree provider, for every backend whose task
+#     worktrees bin/fm-spawn.sh creates (tmux, herdr, zellij, cmux, hc); orca
+#     owns its own task worktree and terminal, so it drops both wt and any
+#     other backend's session CLI.
 # Prints a single space-separated line and returns 0 for a known backend; returns
 # 1 and prints nothing for an unknown backend.
 fm_backend_required_tools() {  # <backend>
   case "$1" in
-    tmux)   printf '%s' 'tmux treehouse' ;;
-    herdr)  printf '%s' 'herdr jq treehouse' ;;
-    zellij) printf '%s' 'zellij jq treehouse' ;;
-    cmux)   printf '%s' 'cmux jq treehouse' ;;
-    hc)     printf '%s' 'herdr-core jq' ;;
+    tmux)   printf '%s' 'tmux wt' ;;
+    herdr)  printf '%s' 'herdr jq wt' ;;
+    zellij) printf '%s' 'zellij jq wt' ;;
+    cmux)   printf '%s' 'cmux jq wt' ;;
+    hc)     printf '%s' 'herdr-core jq wt' ;;
     orca)   printf '%s' 'orca' ;;
     *) return 1 ;;
   esac
