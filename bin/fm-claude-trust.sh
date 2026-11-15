@@ -100,11 +100,10 @@
 # consent-gated external-imports flags land on that resolved canonical
 # checkout, never on the linked-worktree argument itself.
 #
-# The test is deliberately NOT a treehouse or orca path prefix. Treehouse's
-# root is configurable (--root, TREEHOUSE_ROOT, config, and a relative
-# in-project pool), so a prefix check would refuse legitimate roots, accept
-# whatever a mutable env var names, and add exactly the policy surface this
-# registration must not grow. The structural test is verified for treehouse
+# The test is deliberately NOT a worktree-root or orca path prefix. Worktrunk's
+# worktree path template is configurable, so a prefix check would refuse legitimate
+# roots, accept whatever a mutable setting names, and add exactly the policy surface this
+# registration must not grow. The structural test is verified for Worktrunk
 # worktrees, which are linked git worktrees. Orca's worktree shape is UNVERIFIED:
 # docs/orca-backend.md calls it an "independent worktree", which does not
 # establish a shared git common dir, and orca is macOS-only and was not installed
@@ -119,7 +118,7 @@
 #
 # SECONDMATE-HOME MODE. A secondmate home is a whole firstmate instance rather
 # than a task worktree, and bin/fm-home-seed.sh produces it in two shapes: a
-# leased treehouse worktree (linked) and a standalone clone of the firstmate
+# Worktrunk worktree (linked) and a standalone clone of the firstmate
 # repo (a primary checkout). The worktree test above therefore cannot decide
 # this case at all - it refuses the standalone clone as a primary checkout,
 # which is why a claude secondmate in an explicit ~/fm-homes/<id> home met the

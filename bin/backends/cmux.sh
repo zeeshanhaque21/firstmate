@@ -5,7 +5,7 @@
 # section 4) plus the live-app verification pass recorded in
 # docs/cmux-backend.md (real cmux 0.64.17, macOS aarch64, 2026-07-03). cmux is
 # a session provider ONLY, exactly like herdr/zellij: the worktree provider
-# stays treehouse. Sourced only through bin/fm-backend.sh's fm_backend_source
+# stays Worktrunk (wt). Sourced only through bin/fm-backend.sh's fm_backend_source
 # in normal operation; the unit tests source it directly.
 #
 # Container shape: cmux has no "session" layer to multiplex the way
@@ -23,7 +23,7 @@
 # runtime auto-detection when firstmate itself is already running inside a
 # cmux-spawned terminal (primary CMUX_WORKSPACE_ID marker, with documented
 # macOS fallback signals for wrapper-stripped claude). Unlike Orca, cmux is a
-# pure session provider (treehouse still owns the worktree) and Escape IS
+# pure session provider (Worktrunk still owns the worktree) and Escape IS
 # natively supported.
 #
 # Empirical findings from the live verification pass (docs/cmux-backend.md has
@@ -36,7 +36,7 @@
 #      (herdr-shape): `workspace list`'s `current_directory` field reflects a
 #      `cd` run directly in the surface's own top-level shell, but stays
 #      frozen at wherever that shell was when it launched a foreground
-#      subshell (exactly what `treehouse get` does) - verified live: a nested
+#      subshell (a tool that opens its own shell in a directory) - verified live: a nested
 #      `bash -c 'cd /Users && exec bash'` left `current_directory` reporting
 #      the PARENT shell's last cwd, never following into the subshell. Fixed
 #      with zellij's own pwd-marker-probe workaround, reused verbatim in
@@ -437,9 +437,9 @@ fm_backend_cmux_target_ready() {  # <target> [expected-label]
 #
 # Verified pitfall (finding #2 above): cmux's `current_directory` field DOES
 # reflect a `cd` run directly in the surface's own top-level shell, but stays
-# FROZEN at whatever directory that shell was in when it launched `treehouse
-# get` as a foreground command - it never follows that command's own internal
-# `cd` into the acquired worktree. cmux's control socket exposes no
+# FROZEN at whatever directory that shell was in when it launched a nested
+# subshell as a foreground command - it never follows that command's own internal
+# `cd` into the new directory. cmux's control socket exposes no
 # live-process cwd field either (unlike herdr's `foreground_cwd`), so passive
 # polling cannot solve this here any more than it could for zellij. Active
 # probe instead: print the surface's `$PWD` with a unique marker (atomically
