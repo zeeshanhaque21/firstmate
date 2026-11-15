@@ -78,10 +78,10 @@ A bare `<project>` remains a convenience for a project this home already has clo
 [`docs/remote-secondmates.md`](../../../docs/remote-secondmates.md#provision-a-route) owns the rest of the operator contract, and [`bin/fm-project-origin-lib.sh`](../../../bin/fm-project-origin-lib.sh) owns the accepted origin forms.
 Pass `--no-projects` in the project position to seed the project-less home described above; the same mutual-exclusion and fail-loud-on-omission rules apply.
 It may only seed a home with no project clones or project-registry entries, and refuses conversion of populated homes without changing them.
-`-` durably leases a fresh firstmate worktree via `treehouse get --lease` under the secondmate id.
-The lease survives with no live process and is never recycled by later `treehouse get` or `prune`.
-The slot stays reserved across restarts until the lease is released.
-Release happens only on explicit retirement or seed rollback, never on routine restart or recovery.
+`-` creates a Worktrunk worktree of this repository on branch `fm-home/<id>` as the secondmate home, via `wt switch --create`.
+The worktree survives with no live process, and re-seeding the same id reuses it instead of creating a second one.
+It stays across restarts until it is removed.
+Removal happens only on explicit retirement or seed rollback, never on routine restart or recovery.
 
 `bin/fm-home-seed.sh` copies the charter into the secondmate home as `data/charter.md`.
 It also writes the gitignored `.fm-secondmate-parent` durable binding before the required `.fm-secondmate-home` identity marker; the parser header in [`bin/fm-secondmate-parent-lib.sh`](../../../bin/fm-secondmate-parent-lib.sh) owns the record contract, and both files must remain in place.
@@ -246,16 +246,16 @@ Teardown refuses while its `state/*.meta` contains in-flight work.
 A remote route delegates the same guard to its configured host and additionally refuses while the primary has a pending handoff outbox or unresolved routed reply.
 SSH exit 255 preserves the route and local records because remote completion is unknown.
 When safe, teardown kills the direct endpoint, removes the `data/secondmates.md` route, clears the main home metadata, and removes the retired secondmate home.
-Removing a leased home releases its durable treehouse lease via `treehouse return`, so the pool slot is freed for reuse rather than left leased forever.
-A plain-clone home with no pool slot is simply removed.
-If `treehouse return` fails for a leased home, teardown stops with state intact rather than raw-removing the directory and hiding a held lease.
-Before either return or direct removal, teardown asks the target home's process-event runner to retire its registrations and physically owned machine-wide claims through the safe generation-bound path.
+Removing a worktree home runs `wt remove` (never with `--force` or `-D`); a leftover `fm-home/<id>` branch is deleted only when git itself reports it merged.
+A plain-clone home is simply removed.
+If `wt remove` fails for a worktree home, for example because the home has uncommitted changes, teardown stops with state intact rather than raw-removing the directory.
+Before either removal, teardown asks the target home's process-event runner to retire its registrations and physically owned machine-wide claims through the safe generation-bound path.
 It refuses retirement while that cleanup is uncertain or unavailable, preserving the home and retirement records for a later retry.
 Raw deletion is unsupported because a blocking process-event child can outlive its home.
 
 With `--force`, teardown is the explicit discard path.
-The worktree-slot ownership contract in `bin/fm-teardown.sh` still applies: `--force` never authorizes returning a descendant pool slot that another task may own.
-It kills child windows, discards child work and state inside the secondmate home, removes the route, releases the lease, and removes the retired secondmate home.
+The worktree record-exclusivity contract in `bin/fm-teardown.sh` still applies: `--force` never authorizes removing a descendant worktree that another task may own.
+It kills child windows, discards child work and state inside the secondmate home, removes the route, and removes the retired secondmate home.
 If forced teardown contends with a fresh task publication in any affected home, one command refuses without publishing or removing task state; treat that refusal as terminal and inspect the other operation before retrying.
 Relaunch and non-forced teardown remain outside that serialization.
 Never use `--force` unless the captain explicitly said to discard the work.

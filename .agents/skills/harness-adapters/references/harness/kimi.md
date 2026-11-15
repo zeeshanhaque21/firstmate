@@ -14,7 +14,7 @@ Verified on 2026-07-25 with Kimi Code CLI 0.29.1.
 | Interrupt | Single Escape, which prints `Interrupted by user`. |
 | Skill invocation | `/<skill>`, for example `/no-mistakes`; Firstmate skills are discovered. |
 | Autonomy | `--auto`; `-y` and `--yolo` are weaker and are not used. |
-| Trust dialog | None observed on a clean first launch in a fresh pooled worktree. |
+| Trust dialog | None observed on a clean first launch in a fresh Worktrunk worktree. |
 | Slash submission | One Enter submits, with no popup swallow or settle hazard. |
 | Environment marker | None; identity comes from process ancestry command name `kimi`, which `../../../bin/fm-harness.sh` keeps a retained foreign marker from overriding. |
 | Composer | Bordered box with a bare `>` prompt glyph and no observed ghost or placeholder text. |

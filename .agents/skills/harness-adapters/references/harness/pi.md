@@ -32,7 +32,7 @@ Multiple positional arguments become separate queued messages; the spawn templat
 
 A project trust dialog can appear on the first Pi run in any not-yet-trusted directory, including a clean worktree.
 Accept it with Enter and verify the instructions begin processing.
-The decision persists per path in `~/.pi/agent/trust.json`, so later spawns in the same pooled slot skip it.
+The decision persists per path in `~/.pi/agent/trust.json`, so a spawn skips it only in a path it has already seen; every new Worktrunk task worktree is a new path and shows the dialog once.
 
 ## Worker turn-end extension
 

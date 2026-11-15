@@ -80,7 +80,7 @@ This wiring belongs only to the canonical exact `gemini` adapter template, which
 A raw Gemini-shaped launch is an unverified escape hatch: it receives no busy-state wiring or turn-end hook and therefore has no trusted busy state.
 It is deliberately NOT the worktree's `.gemini/settings.json`: unlike Claude's `settings.local.json`, that path is the PROJECT's own committed settings file, so writing it would clobber a project's configuration and retiring it would delete a tracked file.
 Hook arrays MERGE across Gemini's settings layers rather than overriding, so a project's own hooks still run alongside firstmate's; both were observed firing for one turn.
-`../../../../../bin/fm-teardown.sh` removes the file, so nothing survives into a pooled worktree.
+`../../../../../bin/fm-teardown.sh` removes the file, so nothing survives into a later worktree.
 `BeforeAgent` records busy, `AfterAgent` records idle and keeps the `state/<id>.turn-ended` touch as the watcher NOTIFICATION, and `SessionEnd` records idle so an abnormal end cannot strand a busy record.
 Each hook command prints the empty JSON object Gemini's hook contract requires and tolerates a refused event, so a stale-generation writer can never break Gemini's own lifecycle.
 
