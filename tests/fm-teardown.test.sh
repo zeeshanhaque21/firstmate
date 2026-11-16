@@ -645,7 +645,7 @@ run_teardown() {
   # wt runs against scratch config and a scratch HOME: the operator's own wt hooks
   # and git config never apply, and every wt call is logged to wt-calls.log.
   FM_ROOT_OVERRIDE="$ROOT" \
-  FM_STATE_OVERRIDE="$case_dir/state" \
+  FM_STATE_OVERRIDE="${FM_TEST_STATE_VIEW:-$case_dir/state}" \
   FM_DATA_OVERRIDE="$case_dir/data" \
   FM_CONFIG_OVERRIDE="$case_dir/config" \
   XDG_CONFIG_HOME="$case_dir/xdg-config" \
@@ -3786,6 +3786,27 @@ test_real_wt_worktree_already_removed_by_hand_is_not_an_error() {
   pass "real wt: a worktree already deleted by hand is cleaned up, not an error"
 }
 
+test_real_wt_state_dir_reached_through_a_symlink_is_not_a_conflict() {
+  local case_dir rc
+  case_dir=$(make_case real-wt-symlink-state)
+  write_meta "$case_dir" no-mistakes ship
+  # Reach the home (and so its real state dir) through a symlinked ANCESTOR, as a home under macOS /var ->
+  # /private/var is. The exclusivity check scans the caller's state dir AND the home's canonicalized state dir,
+  # which are the same directory spelled two ways, so comparing the task's own record by path spelling made it
+  # look like ANOTHER task owning the same worktree and every teardown was refused. (A state dir that is itself a
+  # symlink is refused earlier, by design, so that is not the shape under test.)
+  ln -s "$case_dir" "$case_dir-link"
+  set +e
+  FM_HOME="$case_dir-link" FM_TEST_STATE_VIEW="$case_dir-link/state" run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+  expect_code 0 "$rc" "real-wt-symlink-state: a task must not conflict with its own record"$'\n'"$(cat "$case_dir/stderr")"
+  grep -q "is also task" "$case_dir/stderr" && fail "real-wt-symlink-state: the task was refused as conflicting with itself"
+  branch_exists "$case_dir" fm/task-x1 && fail "real-wt-symlink-state: branch fm/task-x1 was left behind"
+  [ ! -e "$case_dir/state/task-x1.meta" ] || fail "real-wt-symlink-state: the task record was left behind"
+  pass "real wt: a state dir reached through a symlink does not make a task conflict with its own record"
+}
+
 test_real_wt_force_discards_without_handing_wt_a_force_flag() {
   local case_dir rc
   case_dir=$(make_case real-wt-force)
@@ -3930,6 +3951,7 @@ test_real_wt_uncommitted_work_is_refused_without_calling_wt
 test_real_wt_unlanded_commit_is_refused_without_calling_wt
 test_real_wt_squash_landed_work_removes_worktree_and_branch
 test_real_wt_worktree_already_removed_by_hand_is_not_an_error
+test_real_wt_state_dir_reached_through_a_symlink_is_not_a_conflict
 test_real_wt_force_discards_without_handing_wt_a_force_flag
 test_real_wt_pushed_work_is_removed_and_its_branch_deleted_after_the_landed_proof
 test_real_wt_worker_renamed_branch_is_kept_with_a_notice

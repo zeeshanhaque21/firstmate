@@ -2076,7 +2076,10 @@ require_exclusive_worktree_record() {
   for state_dir in "${LOCAL_FIRSTMATE_STATES[@]}"; do
     for other in "$state_dir"/*.meta; do
       [ -f "$other" ] && [ ! -L "$other" ] || continue
-      [ "$other" != "$record_meta" ] || continue
+      # Compare by file identity, not by path spelling: the state dirs are canonicalized, so a home reached
+      # through a symlink (macOS /var -> /private/var) spells its own record differently and would otherwise
+      # count as another task owning this worktree.
+      [ ! "$other" -ef "$record_meta" ] || continue
       other_id=$(basename "$other" .meta)
       for field in worktree home; do
         other_path=$(fm_meta_get "$other" "$field")
