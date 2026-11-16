@@ -1536,8 +1536,11 @@ fm_backend_target_exists() {  # <backend> <target> [expected-label]
 # no control-plane verb treats a Tern verdict as proof that an agent stopped.
 # hc classifies the one foreground process `hc get` reports through the same
 # classifier and is likewise absent from fm_control_backend_state_verified.
-fm_backend_agent_state() {  # <backend> <target>
-  local backend=$1 target=$2
+# The optional [expected-label] is the task's endpoint label; only hc reads it,
+# to report a present terminal that does not carry it as `ambiguous`, and every
+# other backend ignores it.
+fm_backend_agent_state() {  # <backend> <target> [expected-label]
+  local backend=$1 target=$2 expected=${3:-}
   fm_backend_source "$backend" || { printf 'unverified'; return 0; }
   case "$backend" in
     tmux) fm_backend_tmux_agent_state "$target" ;;
@@ -1545,7 +1548,7 @@ fm_backend_agent_state() {  # <backend> <target>
     rex) fm_backend_rex_agent_state "$target" ;;
     t3code) fm_backend_t3code_agent_state "$target" ;;
     tern) fm_backend_tern_agent_state "$target" ;;
-    hc) fm_backend_hc_agent_state "$target" ;;
+    hc) fm_backend_hc_agent_state "$target" "$expected" ;;
     *) printf 'unverified' ;;
   esac
 }

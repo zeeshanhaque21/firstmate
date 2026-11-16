@@ -25,8 +25,14 @@
 # Identity: each task terminal carries the labels firstmate.task=<window-label>
 # and firstmate.home=<hometag> (bin/fm-backend-hometag-lib.sh). Operations that
 # receive an expected label refuse a terminal whose labels do not match, so a
-# recorded address can never steer input into another home's terminal. hc
-# names are not used: they allow only 1-32 of [a-z0-9_-], narrower than task ids.
+# recorded address can never steer input into another home's terminal. Input
+# (keys, text, submit) and close default a missing label to `*`, any terminal
+# carrying this home's task and home labels, so an explicit target typed with
+# no task still never reaches an unlabelled or foreign terminal; agent_state
+# does the same and reports a present non-matching terminal `ambiguous`.
+# Capture, current path, and composer reads change nothing and stay
+# label-optional. hc names are not used: they allow only 1-32 of [a-z0-9_-],
+# narrower than task ids.
 #
 # Visibility in Herdr.app: the app shows a terminal that carries
 # herdr.space=<id> and herdr.tab=<id> labels, and an unknown id becomes a new
@@ -199,10 +205,22 @@ fm_backend_hc_get() {  # <target>
   fm_backend_hc_cli "$FM_BACKEND_HC_SESSION" get --json "$FM_BACKEND_HC_ADDRESS" 2>/dev/null
 }
 
+# fm_backend_hc_label_matches: whether a terminal's task and home labels carry
+# this home's identity for <expected>. `*` accepts any task label of this home,
+# and an unlabelled terminal never matches it.
+fm_backend_hc_label_matches() {  # <task-label> <home-label> <expected>
+  [ "$2" = "$(fm_backend_hometag)" ] || return 1
+  if [ "$3" = '*' ]; then [ -n "$1" ]; else [ "$1" = "$3" ]; fi
+}
+
 # fm_backend_hc_endpoint_state: classify <target> against a fresh `hc get`.
 # Prints exactly one of: ready, finished, absent, foreign, unreadable. A
 # terminal is `foreign` when [expected-label] is given and its labels do not
 # carry this home's labels for it; `*` accepts any task label of this home.
+# An empty label means no identity check, which only the read-only paths may
+# use: every input and close path defaults an empty label to `*` itself, so a
+# caller that knows no task still cannot reach a terminal firstmate did not
+# label.
 fm_backend_hc_endpoint_state() {  # <target> [expected-label]
   local target=$1 expected=${2:-} json rc fields state task home
   fm_backend_hc_parse_target "$target" || { printf 'unreadable'; return 0; }
@@ -210,16 +228,15 @@ fm_backend_hc_endpoint_state() {  # <target> [expected-label]
   rc=$?
   if [ "$rc" -eq 3 ]; then printf 'absent'; return 0; fi
   [ "$rc" -eq 0 ] || { printf 'unreadable'; return 0; }
-  fields=$(printf '%s' "$json" | jq -r '[.state // "", .labels["firstmate.task"] // "", .labels["firstmate.home"] // ""] | @tsv' 2>/dev/null) || {
+  # The unit separator is not IFS whitespace, so an empty label keeps its slot.
+  fields=$(printf '%s' "$json" | jq -r '[.state // "", .labels["firstmate.task"] // "", .labels["firstmate.home"] // ""] | join("\u001f")' 2>/dev/null) || {
     printf 'unreadable'
     return 0
   }
-  IFS=$'\t' read -r state task home <<EOF
+  IFS=$'\037' read -r state task home <<EOF
 $fields
 EOF
-  if [ -n "$expected" ] && { [ "$home" != "$(fm_backend_hometag)" ] \
-    || { [ "$expected" = '*' ] && [ -z "$task" ]; } \
-    || { [ "$expected" != '*' ] && [ "$task" != "$expected" ]; }; }; then
+  if [ -n "$expected" ] && ! fm_backend_hc_label_matches "$task" "$home" "$expected"; then
     printf 'foreign'
     return 0
   fi
@@ -327,7 +344,7 @@ fm_backend_hc_normalize_key() {  # <key>
 }
 
 fm_backend_hc_send_key() {  # <target> <key> [expected-label]
-  fm_backend_hc_target_ready "$1" "${3:-}" || return 1
+  fm_backend_hc_target_ready "$1" "${3:-*}" || return 1
   fm_backend_hc_cli "$FM_BACKEND_HC_SESSION" keys --json "$FM_BACKEND_HC_ADDRESS" \
     -- "$(fm_backend_hc_normalize_key "$2")" >/dev/null 2>&1
 }
@@ -335,7 +352,7 @@ fm_backend_hc_send_key() {  # <target> <key> [expected-label]
 # fm_backend_hc_send_text_line: paste one line and submit it (`hc send`). The
 # `--` delimiter keeps flag-looking text from being parsed as options.
 fm_backend_hc_send_text_line() {  # <target> <text> [expected-label]
-  fm_backend_hc_target_ready "$1" "${3:-}" || return 1
+  fm_backend_hc_target_ready "$1" "${3:-*}" || return 1
   fm_backend_hc_cli "$FM_BACKEND_HC_SESSION" send --json "$FM_BACKEND_HC_ADDRESS" -- "$2" >/dev/null 2>&1
 }
 
@@ -372,7 +389,7 @@ fm_backend_hc_composer_state() {  # <target> [expected-label] -> empty|pending|p
 # diagnostic and no retries, never forced. The other structured refusals
 # (3 not_found, 11 finished) and any other failure are send-failed.
 fm_backend_hc_send_text_submit() {  # <target> <text> <retries> <enter-sleep> <settle> [expected-label]
-  local target=$1 text=$2 retries=$3 sleep_s=$4 settle=$5 expected=${6:-}
+  local target=$1 text=$2 retries=$3 sleep_s=$4 settle=$5 expected=${6:-*}
   local wait_secs out rc started wait_status verdict
   case "$retries" in ''|*[!0-9]*) retries=1 ;; esac
   case "$sleep_s" in ''|*[!0-9.]*) sleep_s=0.4 ;; esac
@@ -445,25 +462,32 @@ fm_backend_hc_kill() {  # <target> [unused] [expected-label]
 }
 
 # fm_backend_hc_agent_state: recovery-grade state (vocabulary owned by
-# bin/fm-backend.sh's fm_backend_agent_state). A structured not_found or a
-# finished terminal is `missing`: an hc terminal whose program ended can never
-# host the agent again, exactly like a closed tmux window. A live terminal is
-# classified from hc's foreground process through the shared classifier.
-fm_backend_hc_agent_state() {  # <target>
-  local json rc fields state name argv0 args pid class
+# bin/fm-backend.sh's fm_backend_agent_state). Only a structured not_found is
+# `missing`: that terminal is gone, exactly like a closed tmux window. A
+# terminal that is present but does not carry [expected-label] (`*`, any task
+# label of this home, when none is given) is `ambiguous` whatever it runs or
+# whether it finished, so a recorded address that now names someone else's
+# terminal never licenses a relaunch. A finished terminal that is ours is
+# `missing`: its program ended and it can never host the agent again. A live
+# one is classified from hc's foreground process through the shared classifier.
+fm_backend_hc_agent_state() {  # <target> [expected-label]
+  local expected=${2:-*} json rc fields state task home name argv0 args pid class group
   fm_backend_hc_parse_target "${1:-}" || { printf 'unreadable'; return 0; }
   json=$(fm_backend_hc_get "$1")
   rc=$?
   if [ "$rc" -eq 3 ]; then printf 'missing'; return 0; fi
   [ "$rc" -eq 0 ] || { printf 'unreadable'; return 0; }
-  fields=$(printf '%s' "$json" | jq -r '[.state // "", .foreground.name // "", .foreground.argv[0] // "",
-    ((.foreground.argv // []) | join(" ")), (.foreground.pid // "" | tostring)] | @tsv' 2>/dev/null) || {
+  # The unit separator is not IFS whitespace, so an empty field keeps its slot.
+  fields=$(printf '%s' "$json" | jq -r '[.state // "", .labels["firstmate.task"] // "", .labels["firstmate.home"] // "",
+    .foreground.name // "", .foreground.argv[0] // "", ((.foreground.argv // []) | join(" ")),
+    (.foreground.pid // "" | tostring)] | join("\u001f")' 2>/dev/null) || {
     printf 'unreadable'
     return 0
   }
-  IFS=$'\t' read -r state name argv0 args pid <<EOF
+  IFS=$'\037' read -r state task home name argv0 args pid <<EOF
 $fields
 EOF
+  fm_backend_hc_label_matches "$task" "$home" "$expected" || { printf 'ambiguous'; return 0; }
   case "$state" in
     finished) printf 'missing'; return 0 ;;
     live) ;;
@@ -476,25 +500,40 @@ EOF
   # is what hc names as the foreground; the harness itself is another member
   # of the same foreground process group, which is what tmux reads too. A shell
   # wrapper waiting on the harness is such a launcher, so a shell is only dead
-  # once its group holds no harness.
-  fm_backend_hc_group_has_agent "$pid" && { printf 'alive'; return 0; }
-  [ "$class" != shell ] || { printf 'dead'; return 0; }
+  # once its group was read and holds no harness. A group that could not be
+  # read (the leader vanished, ps failed) proves nothing either way.
+  group=0
+  fm_backend_hc_group_has_agent "$pid" || group=$?
+  [ "$group" -ne 0 ] || { printf 'alive'; return 0; }
+  if [ "$class" = shell ] && [ "$group" -eq 1 ]; then printf 'dead'; return 0; fi
   printf 'ambiguous'
 }
 
-# fm_backend_hc_group_has_agent: whether any other process in <pid>'s process
-# group classifies as a harness. Positive evidence only.
+# fm_backend_hc_group_has_agent: whether any other live process in <pid>'s
+# process group classifies as a harness. Returns 0 when one does, 1 when the
+# group was read and none does, 2 when the group cannot be read: the leader is
+# not in the process table, or ps failed. Zombies are skipped because they run
+# nothing.
 fm_backend_hc_group_has_agent() {  # <pid>
-  local pid=$1 pgid member mpgid comm args
-  case "$pid" in ''|*[!0123456789]*) return 1 ;; esac
-  pgid=$(LC_ALL=C ps -o pgid= -p "$pid" 2>/dev/null | tr -d ' ') || return 1
-  [ -n "$pgid" ] || return 1
-  while read -r member mpgid comm; do
+  local pid=$1 table pgid member mpgid mstat comm args
+  case "$pid" in ''|*[!0123456789]*) return 2 ;; esac
+  table=$(LC_ALL=C ps -A -o pid=,pgid=,stat=,comm= 2>/dev/null) || return 2
+  pgid=
+  while read -r member mpgid mstat comm; do
+    [ "$member" = "$pid" ] || continue
+    case "$mstat" in Z*) return 2 ;; esac
+    pgid=$mpgid
+  done <<EOF
+$table
+EOF
+  [ -n "$pgid" ] || return 2
+  while read -r member mpgid mstat comm; do
     [ "$mpgid" = "$pgid" ] && [ "$member" != "$pid" ] || continue
+    case "$mstat" in Z*) continue ;; esac
     args=$(LC_ALL=C ps -o args= -p "$member" 2>/dev/null) || continue
     [ "$(fm_agent_process_classify "$comm" "${args%% *}" "$args" "$member")" = agent ] && return 0
   done <<EOF
-$(LC_ALL=C ps -A -o pid=,pgid=,comm= 2>/dev/null)
+$table
 EOF
   return 1
 }

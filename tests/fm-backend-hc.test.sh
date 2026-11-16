@@ -171,6 +171,41 @@ test_foreign_or_unlabeled_terminal_gets_no_input_and_no_close() {
   pass "hc: another task's, another home's, or an unlabeled terminal gets no input and no close"
 }
 
+# A caller that knows no task (an explicit session:address target) sends no
+# expected label. That must never widen what input and close may reach: only
+# a terminal carrying firstmate's own task and home labels for this home counts.
+test_labelless_actions_reach_only_firstmates_own_terminals() {
+  local tag target out
+  setup_case labelless
+  tag=$(hometag_of)
+  write_terminal "$D" t3 live fm-other other-home zsh /bin/zsh
+  write_terminal "$D" t4 live "" "" zsh /bin/zsh
+  write_terminal "$D" t5 live fm-a1 "" zsh /bin/zsh
+  write_terminal "$D" t6 live "" "$tag" zsh /bin/zsh
+  write_terminal "$D" t7 live fm-a1 "$tag" zsh /bin/zsh
+  for target in fmtest:t3 fmtest:t4 fmtest:t5 fmtest:t6; do
+    expect_refused hc_shell "fm_backend_send_key hc $target Enter"
+    expect_refused hc_shell "fm_backend_send_key hc $target Enter ''"
+    expect_refused hc_shell "fm_backend_hc_send_text_line $target 'rm -rf x'"
+    out=$(hc_shell "fm_backend_send_text_submit hc $target 'rm -rf x' 3 0.4 0")
+    assert_equals "$out" send-failed "a label-less submit to $target must be refused"
+    expect_refused hc_shell "fm_backend_kill hc $target"
+    expect_refused hc_shell "fm_backend_kill hc $target ''"
+  done
+  assert_not_contains "$(cat "$D/log")" $'\x1fkeys\x1f' "no key may reach an unlabelled or foreign terminal"
+  assert_not_contains "$(cat "$D/log")" $'\x1fsend\x1f' "no text may reach an unlabelled or foreign terminal"
+  assert_not_contains "$(cat "$D/log")" $'\x1fkill\x1f' "no unlabelled or foreign terminal may be closed"
+  assert_not_contains "$(cat "$D/log")" $'\x1frm\x1f' "no unlabelled or foreign terminal may be removed"
+  hc_shell 'fm_backend_send_key hc fmtest:t7 Enter' || fail "a label-less key must reach this home's own labelled terminal"
+  hc_shell "fm_backend_hc_send_text_line fmtest:t7 'echo ok'" || fail "a label-less line must reach this home's own labelled terminal"
+  out=$(hc_shell "fm_backend_send_text_submit hc fmtest:t7 'echo ok' 3 0.4 0")
+  assert_equals "$out" empty "a label-less submit must reach this home's own labelled terminal"
+  hc_shell 'fm_backend_kill hc fmtest:t7' || fail "a label-less close must reach this home's own labelled terminal"
+  assert_contains "$(cat "$D/log")" $'keys\x1f--json\x1ft7' "the own terminal received its key"
+  assert_contains "$(cat "$D/log")" $'send\x1f--json\x1ft7\x1f--\x1fecho ok' "the own terminal received its line"
+  pass "hc: a label-less send, keys, submit, or close reaches only this home's labelled terminals"
+}
+
 test_invalid_session_never_reaches_hc() {
   setup_case session
   expect_refused hc_shell 'fm_backend_hc_cli "" ls'
@@ -222,6 +257,94 @@ test_agent_state_reads_a_shell_wrappers_group() {
   wait "$wrapper" 2>/dev/null || true
   assert_equals "$out" alive "a shell wrapper running a harness child is alive"
   pass "hc: agent_state reads a shell wrapper's process group before calling it dead"
+}
+
+# A recorded address that now names another terminal is not this task's: only
+# a structured not_found is `missing`, and `dead` or `missing` on someone
+# else's shell would license a duplicate relaunch.
+test_agent_state_never_calls_a_foreign_terminal_dead_or_missing() {
+  local tag out
+  setup_case foreign-state
+  tag=$(hometag_of)
+  write_terminal "$D" t1 live "" "" zsh /bin/zsh
+  write_terminal "$D" t2 finished "" "" "" ""
+  write_terminal "$D" t3 live fm-a1 other-home zsh /bin/zsh
+  write_terminal "$D" t4 finished fm-a1 other-home "" ""
+  write_terminal "$D" t5 live fm-b2 "$tag" zsh /bin/zsh
+  write_terminal "$D" t6 finished fm-b2 "$tag" "" ""
+  write_terminal "$D" t7 live fm-a1 "$tag" zsh /bin/zsh
+  write_terminal "$D" t8 finished fm-a1 "$tag" "" ""
+  write_terminal "$D" t9 live fm-a1 "$tag" 2.1.312 claude
+  printf '1\n' > "$D/t10.exit"
+  # shellcheck disable=SC2016 # the inner shell expands it
+  out=$(hc_shell 'for a in t1 t2 t3 t4 t5 t6 t7 t8 t9 t10 t11; do printf "%s=%s " $a "$(fm_backend_agent_state hc fmtest:$a fm-a1)"; done')
+  assert_equals "$out" "t1=ambiguous t2=ambiguous t3=ambiguous t4=ambiguous t5=ambiguous t6=ambiguous t7=dead t8=missing t9=alive t10=unreadable t11=missing " \
+    "agent_state with an expected label: foreign, unlabelled, other-home and other-task terminals are ambiguous; only the task's own terminal is classified; only not_found of an absent terminal is missing"
+  # shellcheck disable=SC2016 # the inner shell expands it
+  out=$(hc_shell 'for a in t1 t2 t3 t4 t5 t6 t7 t8 t9 t11; do printf "%s=%s " $a "$(fm_backend_agent_state hc fmtest:$a)"; done')
+  assert_equals "$out" "t1=ambiguous t2=ambiguous t3=ambiguous t4=ambiguous t5=dead t6=missing t7=dead t8=missing t9=alive t11=missing " \
+    "agent_state with no label accepts any task label of this home and still refuses unlabelled and other-home terminals"
+  pass "hc: agent_state reads a foreign terminal at the recorded address as ambiguous, never dead or missing"
+}
+
+# The leader's group is the evidence for a shell leader; when it cannot be read
+# the shell is not proven agent-free.
+test_agent_state_group_that_cannot_be_read_is_ambiguous() {
+  local tag out gone
+  setup_case vanished
+  tag=$(hometag_of)
+  bash -c 'exit 0' &
+  gone=$!
+  wait "$gone" 2>/dev/null || true
+  write_terminal "$D" t1 live fm-a1 "$tag" bash bash
+  jq --argjson p "$gone" '.foreground.pid = $p' "$D/t1.json" > "$D/t1.tmp" && mv "$D/t1.tmp" "$D/t1.json"
+  write_terminal "$D" t2 live fm-a1 "$tag" bash bash
+  jq 'del(.foreground.pid)' "$D/t2.json" > "$D/t2.tmp" && mv "$D/t2.tmp" "$D/t2.json"
+  # shellcheck disable=SC2016 # the inner shell expands it
+  out=$(hc_shell 'for a in t1 t2; do printf "%s=%s " $a "$(fm_backend_agent_state hc fmtest:$a fm-a1)"; done')
+  assert_equals "$out" "t1=ambiguous t2=ambiguous " \
+    "a shell leader whose process group cannot be read (vanished pid, no pid) is ambiguous, not dead"
+  pass "hc: agent_state calls a shell with an unreadable process group ambiguous, not dead"
+}
+
+# A zombie runs nothing, so a defunct harness-named group member is no agent.
+# The zombie is a real process whose parent never waits for it. Linux keeps a
+# zombie's name (the harness name) in the process table while macOS blanks it
+# to <defunct>, so a ps shim restores the name on the real zombie's row to
+# exercise the same table on both.
+test_agent_state_zombie_group_member_is_not_an_agent() {
+  local tag out leader zombie_seen=0 realps
+  setup_case zombie
+  tag=$(hometag_of)
+  realps=$(command -v ps)
+  cat > "$FB/ps" <<SH
+#!/bin/sh
+$realps "\$@" | awk '\$3 ~ /^Z/ && \$4 == "<defunct>" { \$4 = "claude" } 1'
+SH
+  chmod +x "$FB/ps"
+  # A wrapper in its own process group: the harness-named child exits at once
+  # and stays defunct because the wrapper, now a plain sleep, never reaps it.
+  set -m
+  bash -c '(exec -a claude sleep 0.1) & exec sleep 30' &
+  leader=$!
+  set +m
+  write_terminal "$D" t1 live fm-a1 "$tag" bash bash
+  jq --argjson p "$leader" '.foreground.pid = $p' "$D/t1.json" > "$D/t1.tmp" && mv "$D/t1.tmp" "$D/t1.json"
+  for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
+    if "$realps" -A -o pgid=,stat= | awk -v g="$leader" '$1 == g && $2 ~ /^Z/ { f = 1 } END { exit !f }'; then
+      zombie_seen=1
+      break
+    fi
+    sleep 0.1
+  done
+  [ "$zombie_seen" = 1 ] || { kill -- "-$leader" 2>/dev/null || true; fail "the test never produced a defunct group member"; }
+  assert_contains "$(FAKE_HC_DIR=$D PATH="$FB:$PATH" ps -A -o pid=,pgid=,stat=,comm= | awk -v g="$leader" '$2 == g && $3 ~ /^Z/')" claude \
+    "the shim must show the zombie under the harness name, as Linux does"
+  out=$(hc_shell 'fm_backend_agent_state hc fmtest:t1 fm-a1')
+  kill -- "-$leader" 2>/dev/null || true
+  wait "$leader" 2>/dev/null || true
+  assert_equals "$out" dead "a defunct harness-named group member must not make a shell leader alive"
+  pass "hc: agent_state does not count a zombie group member as an agent"
 }
 
 test_kill_proves_the_terminal_is_gone() {
@@ -366,10 +489,14 @@ fm_test_run \
   test_create_task_is_independent_labeled_and_refuses_duplicates \
   test_control_interrupt_delivers_the_harness_keys \
   test_foreign_or_unlabeled_terminal_gets_no_input_and_no_close \
+  test_labelless_actions_reach_only_firstmates_own_terminals \
   test_invalid_session_never_reaches_hc \
   test_inherited_socket_never_overrides_the_session \
   test_agent_state_classifies_foreground_and_absence \
   test_agent_state_reads_a_shell_wrappers_group \
+  test_agent_state_never_calls_a_foreign_terminal_dead_or_missing \
+  test_agent_state_group_that_cannot_be_read_is_ambiguous \
+  test_agent_state_zombie_group_member_is_not_an_agent \
   test_kill_proves_the_terminal_is_gone \
   test_kill_refuses_another_tasks_terminal \
   test_capture_and_current_path_read_the_recorded_terminal \

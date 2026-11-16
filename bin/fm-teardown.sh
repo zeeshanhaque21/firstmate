@@ -1349,7 +1349,7 @@ if [ "$TEARDOWN_LEGACY_PENDING" = 1 ]; then
   if [ "$TEARDOWN_WINDOWLESS" = 1 ]; then
     TEARDOWN_LEGACY_ENDPOINT=missing
   else
-    TEARDOWN_LEGACY_ENDPOINT=$(fm_backend_agent_state "$BACKEND" "$T")
+    TEARDOWN_LEGACY_ENDPOINT=$(fm_backend_agent_state "$BACKEND" "$T" "fm-$ID")
     case "$TEARDOWN_LEGACY_ENDPOINT" in
       dead|missing) ;;
       *)
