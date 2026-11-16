@@ -47,10 +47,14 @@ fm_test_scratch_home_path() {
 }
 
 # A fake tmux (window ops are logged to FM_FAKE_TMUX_LOG, list-windows returns
-# FM_FAKE_TMUX_WINDOW, capture-pane echoes FM_FAKE_TMUX_CAPTURE). Echoes the
-# fakebin dir.
+# FM_FAKE_TMUX_WINDOW, capture-pane echoes FM_FAKE_TMUX_CAPTURE) beside a wt
+# wrapper: every wt call is logged to the same file as `wt <args>`, a `remove`
+# fails with status 17 while FM_FAKE_WT_REMOVE_FAIL is set, and everything else
+# runs the REAL wt against a scratch XDG_CONFIG_HOME, so the operator's own wt
+# configuration and hooks never apply. A suite using this fakebin must call
+# fm_test_require_wt first. Echoes the fakebin dir.
 make_fake_tmux() {
-  local dir=$1 fakebin capture
+  local dir=$1 fakebin capture real_wt
   fakebin=$(fm_fakebin "$dir")
   capture="$dir/pane.txt"
   # A real, positively identified empty agent composer. A blank capture is
@@ -103,6 +107,22 @@ esac
 exit 1
 SH
   chmod +x "$fakebin/tmux"
+  real_wt=$(command -v wt || true)
+  cat > "$fakebin/wt" <<SH
+#!/usr/bin/env bash
+set -u
+printf 'wt %s\\n' "\$*" >> "\${FM_FAKE_TMUX_LOG:-/dev/null}"
+case " \$* " in
+  *" remove "*) [ -z "\${FM_FAKE_WT_REMOVE_FAIL:-}" ] || exit 17 ;;
+esac
+export XDG_CONFIG_HOME="$dir/wt-xdg"
+exec "${real_wt:-/nonexistent-wt}" "\$@"
+SH
+  chmod +x "$fakebin/wt"
+  # Pin the layout so a home lands beside its repository in <repo>-worktrees/<branch>
+  # whatever wt's built-in default (or the operator's own config) would choose.
+  mkdir -p "$dir/wt-xdg/worktrunk"
+  printf 'worktree-path = "{{ repo_path }}-worktrees/{{ branch | sanitize }}"\n' > "$dir/wt-xdg/worktrunk/config.toml"
   : > "$dir/tmux.log"
   printf '%s\n' "$fakebin"
 }
@@ -154,18 +174,21 @@ mark_firstmate_home() {
 }
 
 # A firstmate home that is also a real git repo (so it can host detached
-# worktrees for teardown/lease tests).
+# worktrees for teardown tests). Its .gitignore carries the instance files the real
+# repository ignores, so a secondmate home's markers do not read as uncommitted
+# work to the real wt that removes it.
 make_firstmate_git_root() {
   local home=$1
   mkdir -p "$home/bin"
   printf '# Firstmate\n' > "$home/AGENTS.md"
+  printf '%s\n' projects/ state/ data/ config/ .fm-secondmate-home .fm-secondmate-parent > "$home/.gitignore"
   cat > "$home/bin/fm-guard.sh" <<'SH'
 #!/usr/bin/env bash
 exit 0
 SH
   chmod +x "$home/bin/fm-guard.sh"
   git -C "$home" init -q
-  git -C "$home" add AGENTS.md bin/fm-guard.sh
+  git -C "$home" add AGENTS.md .gitignore bin/fm-guard.sh
   git -C "$home" -c user.name='Firstmate Tests' -c user.email='tests@example.invalid' commit -qm initial
 }
 

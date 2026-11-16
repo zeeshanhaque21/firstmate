@@ -423,6 +423,14 @@ SH
   done
 }
 
+# fm_test_require_wt
+# Skips the whole suite (exit 0 with the repo's `skip:` marker) where the real
+# Worktrunk `wt` is not installed, because every spawn and teardown path creates
+# and removes worktrees through it. Call it at file scope, before any fixture.
+fm_test_require_wt() {
+  command -v wt >/dev/null 2>&1 || { echo "skip: wt (Worktrunk) not found"; exit 0; }
+}
+
 # fm_fake_wt_fixed <fakebin>
 # A `wt` for suites that exercise something OTHER than worktree creation (harness
 # launch shape, brief delivery, trust handling) and already own a real git

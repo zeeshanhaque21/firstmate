@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # tests/fm-secondmate-safety.test.sh - secondmate home safety invariants:
 # the path-boundary matrices (seed/spawn/teardown), registry/charter/origin
-# validation, treehouse lease handling, no-mistakes initialization of new
+# validation, wt-created home handling, no-mistakes initialization of new
 # clones, child-worktree protection, and backlog-handoff safety. The happy-path
 # operator flow lives in fm-secondmate-lifecycle-e2e.test.sh; this file keeps the
 # destructive-invariant coverage that an e2e run cannot deterministically reach.
@@ -10,6 +10,7 @@ set -u
 # shellcheck source=tests/secondmate-helpers.sh disable=SC1091
 . "$(dirname "${BASH_SOURCE[0]}")/secondmate-helpers.sh"
 
+fm_test_require_wt
 TMP_ROOT=$(fm_test_tmproot fm-secondmate-safety)
 export FM_BACKEND=tmux
 
@@ -265,129 +266,221 @@ EOF
   pass "home seed validation rejects nested home routes"
 }
 
-test_home_seed_uses_treehouse_acquired_home() {
-  local home acquired acquired_abs fakebin log lease out
-  home="$TMP_ROOT/dash-home"
-  acquired="$TMP_ROOT/dash-acquired-home"
-  mkdir -p "$home/projects" "$home/data" "$home/state"
-  fm_git_init_commit "$home/projects/alpha"
-  fm_git_add_origin "$home/projects/alpha" "$TMP_ROOT/remotes/dash-alpha.git"
-  printf '%s\n' '- alpha [direct-PR] - alpha project (added 2026-06-22)' > "$home/data/projects.md"
-  git clone --quiet "$ROOT" "$acquired"
-  fakebin=$(make_fake_tmux "$TMP_ROOT/dash-fake")
-  log="$TMP_ROOT/dash-fake/tmux.log"
-  lease="$TMP_ROOT/dash-fake/lease"
+# --- homes acquired from wt ('-' as the home) -----------------------------------
+#
+# `fm-home-seed.sh <id> - ...` asks Worktrunk for the secondmate home: a worktree of
+# the firstmate repository on branch fm-home/<id>. The repository is FM_ROOT, which
+# defaults to the one hosting these tests - so every case here points FM_ROOT_OVERRIDE
+# at a scratch firstmate repository, or the seed would create its branch and worktree
+# in the real checkout. wt itself is the real one, run through the fakebin's wrapper
+# that logs each call and pins a scratch XDG_CONFIG_HOME.
 
-  out=$(PATH="$fakebin:$PATH" FM_HOME="$home" FM_FAKE_TREEHOUSE_HOME="$acquired" FM_FAKE_TMUX_LOG="$log" \
-    FM_FAKE_TREEHOUSE_LEASE_FILE="$lease" \
-    FM_SECONDMATE_CHARTER='dash acquired scope' FM_SECONDMATE_SCOPE='dash acquired scope' \
-    "$ROOT/bin/fm-home-seed.sh" dash - alpha) \
-    || fail "seed failed for a treehouse-acquired home"
-  acquired_abs=$(cd "$acquired" && pwd -P)
-  printf '%s\n' "$out" | grep -F "home=$acquired_abs" >/dev/null || fail "seed did not report acquired home"
-  grep -F 'treehouse get --lease --lease-holder dash' "$log" >/dev/null || fail "seed did not durably lease a home under the secondmate id"
-  [ -f "$lease" ] || fail "seed did not record a treehouse lease"
-  [ "$(cat "$lease")" = dash ] || fail "seed did not set the lease holder to the secondmate id"
-  [ -f "$acquired/.fm-secondmate-home" ] || fail "seed did not mark acquired home"
-  [ "$(cat "$acquired/.fm-secondmate-home")" = dash ] || fail "seed wrote wrong acquired-home marker"
-  [ -d "$acquired/projects/alpha/.git" ] || fail "seed did not clone project into acquired home"
-  grep -F "home: $acquired_abs" "$home/data/secondmates.md" >/dev/null || fail "registry did not record acquired home"
-  pass "home seeding durably leases treehouse-acquired dash homes under the secondmate id"
+# make_dash_world <name> -> sets DASH_HOME DASH_ROOT DASH_FAKEBIN DASH_LOG DASH_XDG
+make_dash_world() {
+  local name=$1
+  DASH_HOME="$TMP_ROOT/$name-home"
+  DASH_ROOT=$(fm_test_scratch_firstmate_root "$TMP_ROOT/$name-fmroot")
+  mkdir -p "$DASH_HOME/projects" "$DASH_HOME/data" "$DASH_HOME/state"
+  fm_git_init_commit "$DASH_HOME/projects/alpha"
+  fm_git_add_origin "$DASH_HOME/projects/alpha" "$TMP_ROOT/remotes/$name-alpha.git"
+  printf '%s\n' '- alpha [direct-PR] - alpha project (added 2026-06-22)' > "$DASH_HOME/data/projects.md"
+  DASH_FAKEBIN=$(make_fake_tmux "$TMP_ROOT/$name-fake")
+  DASH_LOG="$TMP_ROOT/$name-fake/tmux.log"
 }
 
-test_home_seed_returns_treehouse_acquired_home_on_assignment_failure() {
-  local home acquired acquired_abs fakebin log err
-  home="$TMP_ROOT/dash-fail-home"
-  acquired="$TMP_ROOT/dash-fail-acquired-home"
+# dash_seed <extra env assignments are inherited> [seed args...]: seed id `dash` with
+# '-' as the home against the world's scratch repository.
+dash_seed() {
+  PATH="$DASH_FAKEBIN:$PATH" FM_HOME="$DASH_HOME" FM_ROOT_OVERRIDE="$DASH_ROOT" FM_FAKE_TMUX_LOG="$DASH_LOG" \
+    FM_SECONDMATE_CHARTER='dash acquired scope' FM_SECONDMATE_SCOPE='dash acquired scope' \
+    "$ROOT/bin/fm-home-seed.sh" dash - "$@"
+}
+
+test_home_seed_creates_a_wt_home_on_the_id_branch() {
+  local out wt_home wt_home_abs
+  make_dash_world dash
+
+  out=$(dash_seed alpha) || fail "seed failed for a wt-created home"
+  wt_home=$(fm_test_scratch_home_path "$DASH_ROOT" dash)
+  [ -n "$wt_home" ] || fail "seed did not create a worktree on branch fm-home/dash"
+  wt_home_abs=$(cd "$wt_home" && pwd -P)
+  printf '%s\n' "$out" | grep -F "home=$wt_home_abs" >/dev/null || fail "seed did not report the wt-created home"
+  grep -F "wt -C $DASH_ROOT switch --create fm-home/dash" "$DASH_LOG" >/dev/null \
+    || fail "seed did not create its home with wt switch --create fm-home/dash in the scratch firstmate repository"
+  git -C "$DASH_ROOT" show-ref --verify --quiet refs/heads/fm-home/dash || fail "branch fm-home/dash does not exist in the scratch repository"
+  [ -f "$wt_home/.fm-secondmate-home" ] || fail "seed did not mark the wt-created home"
+  [ "$(cat "$wt_home/.fm-secondmate-home")" = dash ] || fail "seed wrote the wrong home marker"
+  [ -d "$wt_home/projects/alpha/.git" ] || fail "seed did not clone the project into the wt-created home"
+  grep -F "home: $wt_home_abs" "$DASH_HOME/data/secondmates.md" >/dev/null || fail "registry did not record the wt-created home"
+  # The repository hosting these tests must be untouched (the suite tripwire checks
+  # the whole repository on exit; this names the exact branch).
+  git -C "$ROOT" show-ref --verify --quiet refs/heads/fm-home/dash \
+    && fail "seeding leaked branch fm-home/dash into the repository hosting the tests"
+  pass "home seeding creates a wt worktree on fm-home/<id> in the scratch firstmate repository and records it"
+}
+
+test_home_seed_is_idempotent_for_the_same_id() {
+  local first_count second_count registered
+  make_dash_world dash-again
+  dash_seed alpha >/dev/null || fail "first seed failed"
+  first_count=$(git -C "$DASH_ROOT" worktree list --porcelain | grep -c '^worktree ')
+
+  # A second seed of the same id reuses the existing branch and worktree
+  # (`wt switch fm-home/dash`, never --create) and must leave one home and one route.
+  : > "$DASH_LOG"
+  dash_seed alpha >/dev/null 2>&1 || true
+  second_count=$(git -C "$DASH_ROOT" worktree list --porcelain | grep -c '^worktree ')
+  [ "$first_count" = "$second_count" ] || fail "re-seeding the same id changed the number of worktrees ($first_count -> $second_count)"
+  grep -F "switch --create" "$DASH_LOG" >/dev/null && fail "re-seeding an existing id asked wt to create the branch again"
+  [ "$(git -C "$DASH_ROOT" branch --list 'fm-home/*' | wc -l | tr -d ' ')" = 1 ] || fail "re-seeding created a second fm-home branch"
+  registered=$(grep -c -- '^- dash ' "$DASH_HOME/data/secondmates.md")
+  [ "$registered" = 1 ] || fail "re-seeding duplicated the registry route ($registered lines)"
+  pass "re-seeding the same id never duplicates the home, its branch, or its registry route"
+}
+
+test_home_seed_rolls_back_a_freshly_created_wt_home_on_failure() {
+  local err
+  make_dash_world dash-fail
   err="$TMP_ROOT/dash-fail.err"
-  mkdir -p "$home/projects" "$home/data" "$home/state"
-  fm_git_init_commit "$home/projects/alpha"
-  fm_git_add_origin "$home/projects/alpha" "$TMP_ROOT/remotes/dash-fail-alpha.git"
-  printf '%s\n' '- alpha [direct-PR] - alpha project (added 2026-06-22)' > "$home/data/projects.md"
-  git clone --quiet "$ROOT" "$acquired"
-  acquired_abs=$(cd "$acquired" && pwd -P)
-  printf 'other\n' > "$acquired/.fm-secondmate-home"
-  fakebin=$(make_fake_tmux "$TMP_ROOT/dash-fail-fake")
-  log="$TMP_ROOT/dash-fail-fake/tmux.log"
-
-  if PATH="$fakebin:$PATH" FM_HOME="$home" FM_FAKE_TREEHOUSE_HOME="$acquired" FM_FAKE_TMUX_LOG="$log" \
-    FM_SECONDMATE_CHARTER='dash acquired scope' FM_SECONDMATE_SCOPE='dash acquired scope' \
+  # No charter: the seed fails after wt has already created the home.
+  if PATH="$DASH_FAKEBIN:$PATH" FM_HOME="$DASH_HOME" FM_ROOT_OVERRIDE="$DASH_ROOT" FM_FAKE_TMUX_LOG="$DASH_LOG" \
     "$ROOT/bin/fm-home-seed.sh" dash - alpha >/dev/null 2>"$err"; then
-    fail "seed reused an acquired home marked for another secondmate"
+    fail "seed succeeded without a filled charter"
   fi
-  grep -F 'already marked for other' "$err" >/dev/null || fail "seed did not explain acquired marked-home rejection"
-  grep -F "treehouse return --force $acquired_abs" "$log" >/dev/null \
-    || fail "failed acquired seed did not return the home through treehouse"
-  if [ -f "$home/data/secondmates.md" ] && grep -F -- '- dash ' "$home/data/secondmates.md" >/dev/null; then
-    fail "failed acquired seed left a registry route"
+  grep -F 'no filled secondmate charter brief' "$err" >/dev/null || fail "seed did not explain the missing charter"
+  grep -E "wt -C $DASH_ROOT remove .*fm-home-dash --foreground" "$DASH_LOG" >/dev/null \
+    || fail "failed seed did not remove the home it created through wt remove"
+  grep -F -e ' --force' -e ' -D' "$DASH_LOG" | grep '^wt ' >/dev/null && fail "seed rollback handed wt a force flag"
+  [ -z "$(fm_test_scratch_home_path "$DASH_ROOT" dash)" ] || fail "failed seed left its worktree behind"
+  git -C "$DASH_ROOT" show-ref --verify --quiet refs/heads/fm-home/dash && fail "failed seed left branch fm-home/dash behind"
+  if [ -f "$DASH_HOME/data/secondmates.md" ] && grep -F -- '- dash ' "$DASH_HOME/data/secondmates.md" >/dev/null; then
+    fail "failed seed left a registry route"
   fi
-  pass "home seeding returns rejected acquired homes through treehouse"
+  pass "a failed seed removes the wt home it created, with no residue and no force flag"
 }
 
-test_home_seed_warns_when_acquired_home_return_fails() {
-  local home acquired acquired_abs fakebin log err lease
-  home="$TMP_ROOT/dash-return-fail-home"
-  acquired="$TMP_ROOT/dash-return-fail-acquired-home"
+test_home_seed_warns_when_rolling_back_the_wt_home_fails() {
+  local err
+  make_dash_world dash-return-fail
   err="$TMP_ROOT/dash-return-fail.err"
-  mkdir -p "$home/projects" "$home/data" "$home/state"
-  fm_git_init_commit "$home/projects/alpha"
-  fm_git_add_origin "$home/projects/alpha" "$TMP_ROOT/remotes/dash-return-fail-alpha.git"
-  printf '%s\n' '- alpha [direct-PR] - alpha project (added 2026-06-22)' > "$home/data/projects.md"
-  git clone --quiet "$ROOT" "$acquired"
-  acquired_abs=$(cd "$acquired" && pwd -P)
-  printf 'other\n' > "$acquired/.fm-secondmate-home"
-  fakebin=$(make_fake_tmux "$TMP_ROOT/dash-return-fail-fake")
-  log="$TMP_ROOT/dash-return-fail-fake/tmux.log"
-  lease="$TMP_ROOT/dash-return-fail-fake/lease"
-
-  if PATH="$fakebin:$PATH" FM_HOME="$home" FM_FAKE_TREEHOUSE_HOME="$acquired" FM_FAKE_TMUX_LOG="$log" \
-    FM_FAKE_TREEHOUSE_LEASE_FILE="$lease" FM_FAKE_TREEHOUSE_RETURN_FAIL=1 \
-    FM_SECONDMATE_CHARTER='dash acquired scope' FM_SECONDMATE_SCOPE='dash acquired scope' \
-    "$ROOT/bin/fm-home-seed.sh" dash - alpha >/dev/null 2>"$err"; then
-    fail "seed reused an acquired home after return failure setup"
+  if PATH="$DASH_FAKEBIN:$PATH" FM_HOME="$DASH_HOME" FM_ROOT_OVERRIDE="$DASH_ROOT" FM_FAKE_TMUX_LOG="$DASH_LOG" \
+    FM_FAKE_WT_REMOVE_FAIL=1 "$ROOT/bin/fm-home-seed.sh" dash - alpha >/dev/null 2>"$err"; then
+    fail "seed succeeded without a filled charter"
   fi
-  grep -F 'already marked for other' "$err" >/dev/null || fail "seed did not report original acquired-home rejection"
-  grep -F "warning: failed to return treehouse-acquired home $acquired_abs during seed rollback" "$err" >/dev/null \
-    || fail "seed rollback did not warn when treehouse return failed"
-  [ -f "$lease" ] || fail "failed rollback return did not preserve lease evidence"
-  grep -F "treehouse return --force $acquired_abs" "$log" >/dev/null \
-    || fail "failed rollback did not attempt to return the acquired home"
-  pass "home seed rollback warns when treehouse-acquired return fails"
+  grep -F 'no filled secondmate charter brief' "$err" >/dev/null || fail "seed did not report the original failure"
+  grep -F 'warning: failed to remove acquired home' "$err" >/dev/null \
+    || fail "seed rollback did not warn when wt remove failed"
+  [ -n "$(fm_test_scratch_home_path "$DASH_ROOT" dash)" ] || fail "the worktree vanished although wt remove failed"
+  pass "home seed rollback warns when removing the wt-created home fails"
 }
 
-test_home_seed_does_not_return_unsafe_acquired_home() {
-  local home descendant fakebin log err
-  home="$TMP_ROOT/dash-active-home"
-  descendant="$home/data/dash-descendant-home"
-  err="$TMP_ROOT/dash-active.err"
-  mkdir -p "$home/projects" "$home/data" "$home/state"
-  fm_git_init_commit "$home/projects/alpha"
-  fm_git_add_origin "$home/projects/alpha" "$TMP_ROOT/remotes/dash-active-alpha.git"
-  printf '%s\n' '- alpha [direct-PR] - alpha project (added 2026-06-22)' > "$home/data/projects.md"
-  fakebin=$(make_fake_tmux "$TMP_ROOT/dash-active-fake")
-  log="$TMP_ROOT/dash-active-fake/tmux.log"
+test_home_seed_never_removes_a_preexisting_wt_home_it_rejects() {
+  local wt_home err
+  make_dash_world dash-marked
+  err="$TMP_ROOT/dash-marked.err"
+  # The branch and worktree already exist and belong to another secondmate: the seed
+  # reuses them (it did not create them), refuses the assignment, and must leave them.
+  PATH="$DASH_FAKEBIN:$PATH" wt -C "$DASH_ROOT" switch --create fm-home/dash --no-cd --format json >/dev/null 2>&1 \
+    || fail "could not pre-create the fm-home/dash worktree"
+  wt_home=$(fm_test_scratch_home_path "$DASH_ROOT" dash)
+  printf 'other\n' > "$wt_home/.fm-secondmate-home"
+  : > "$DASH_LOG"
 
-  if PATH="$fakebin:$PATH" FM_HOME="$home" FM_FAKE_TREEHOUSE_HOME="$home" FM_FAKE_TMUX_LOG="$log" \
-    "$ROOT/bin/fm-home-seed.sh" dash - alpha >/dev/null 2>"$err"; then
-    fail "seed accepted an acquired home matching the active firstmate home"
+  if dash_seed alpha >/dev/null 2>"$err"; then
+    fail "seed reused a wt home marked for another secondmate"
+  fi
+  grep -F 'already marked for other' "$err" >/dev/null || fail "seed did not explain the marked-home rejection"
+  grep -F ' remove ' "$DASH_LOG" | grep '^wt ' >/dev/null && fail "seed removed a wt home it had not created"
+  [ -d "$wt_home" ] || fail "seed rollback removed a pre-existing wt home"
+  [ "$(cat "$wt_home/.fm-secondmate-home")" = other ] || fail "seed rewrote another secondmate's home marker"
+  if [ -f "$DASH_HOME/data/secondmates.md" ] && grep -F -- '- dash ' "$DASH_HOME/data/secondmates.md" >/dev/null; then
+    fail "rejected seed left a registry route"
+  fi
+  pass "home seeding never removes a pre-existing wt home it rejects"
+}
+
+test_home_seed_does_not_remove_an_unsafe_wt_home() {
+  local err wt_home before
+  # The wt home IS the active firstmate home: the seed refuses it and must not
+  # remove the home it is running from.
+  make_dash_world dash-active
+  err="$TMP_ROOT/dash-active.err"
+  PATH="$DASH_FAKEBIN:$PATH" wt -C "$DASH_ROOT" switch --create fm-home/dash --no-cd --format json >/dev/null 2>&1 \
+    || fail "could not pre-create the fm-home/dash worktree"
+  wt_home=$(fm_test_scratch_home_path "$DASH_ROOT" dash)
+  mkdir -p "$wt_home/projects" "$wt_home/data" "$wt_home/state"
+  cp -R "$DASH_HOME/projects/alpha" "$wt_home/projects/alpha"
+  cp "$DASH_HOME/data/projects.md" "$wt_home/data/projects.md"
+  : > "$DASH_LOG"
+  if PATH="$DASH_FAKEBIN:$PATH" FM_HOME="$wt_home" FM_ROOT_OVERRIDE="$DASH_ROOT" FM_FAKE_TMUX_LOG="$DASH_LOG" \
+    FM_SECONDMATE_CHARTER='dash acquired scope' "$ROOT/bin/fm-home-seed.sh" dash - alpha >/dev/null 2>"$err"; then
+    fail "seed accepted a wt home matching the active firstmate home"
   fi
   grep -F 'secondmate home cannot be the active firstmate home' "$err" >/dev/null \
-    || fail "seed did not explain active acquired-home rejection"
-  grep -F "treehouse return --force" "$log" >/dev/null \
-    && fail "seed returned an unsafe acquired active home through treehouse"
-  [ -d "$home/projects/alpha" ] || fail "unsafe acquired-home rollback removed the active home"
+    || fail "seed did not explain the active-home rejection"
+  grep -F ' remove ' "$DASH_LOG" | grep '^wt ' >/dev/null && fail "seed removed the active firstmate home through wt"
+  [ -d "$wt_home/projects" ] || fail "rejection removed the active home"
 
-  : > "$log"
-  if PATH="$fakebin:$PATH" FM_HOME="$home" FM_FAKE_TREEHOUSE_HOME="$descendant" FM_FAKE_TMUX_LOG="$log" \
-    "$ROOT/bin/fm-home-seed.sh" dash - alpha >/dev/null 2>"$err"; then
-    fail "seed accepted an acquired home inside the active firstmate home"
+  # The wt home would be created INSIDE the active home (wt puts it beside the
+  # repository, in <root>-worktrees): freshly created, but unsafe to roll back, so
+  # the rollback refuses and leaves it in place.
+  make_dash_world dash-inside
+  err="$TMP_ROOT/dash-inside.err"
+  before="$DASH_ROOT-worktrees"
+  mkdir -p "$before/projects" "$before/data" "$before/state"
+  cp -R "$DASH_HOME/projects/alpha" "$before/projects/alpha"
+  cp "$DASH_HOME/data/projects.md" "$before/data/projects.md"
+  : > "$DASH_LOG"
+  if PATH="$DASH_FAKEBIN:$PATH" FM_HOME="$before" FM_ROOT_OVERRIDE="$DASH_ROOT" FM_FAKE_TMUX_LOG="$DASH_LOG" \
+    FM_SECONDMATE_CHARTER='dash acquired scope' "$ROOT/bin/fm-home-seed.sh" dash - alpha >/dev/null 2>"$err"; then
+    fail "seed accepted a wt home inside the active firstmate home"
   fi
   grep -F 'secondmate home cannot be inside the active firstmate home' "$err" >/dev/null \
-    || fail "seed did not explain active descendant acquired-home rejection"
-  grep -F "treehouse return --force" "$log" >/dev/null \
-    && fail "seed returned an unsafe acquired active descendant through treehouse"
-  [ -d "$descendant" ] || fail "unsafe acquired-home rollback removed the active descendant"
-  pass "home seeding leaves unsafe acquired active homes untouched"
+    || fail "seed did not explain the descendant-home rejection"
+  grep -F ' remove ' "$DASH_LOG" | grep '^wt ' >/dev/null && fail "seed removed a wt home inside the active firstmate home"
+  [ -d "$before/fm-home-dash" ] || fail "rollback removed a wt home inside the active firstmate home"
+  pass "home seeding leaves unsafe wt homes (the active home, or one inside it) untouched"
+}
+
+# Retiring a seeded wt home: uncommitted work in it is never discarded (wt remove
+# refuses it, and teardown never hands wt a force flag), and once the home is clean
+# the retirement removes the worktree, its branch, the parent record and the route.
+test_secondmate_teardown_refuses_a_dirty_wt_home_then_retires_it_clean() {
+  local wt_home wt_home_abs rc err out
+  make_dash_world dash-retire
+  err="$TMP_ROOT/dash-retire.err"
+  dash_seed alpha >/dev/null || fail "seed failed for the retirement fixture"
+  wt_home=$(fm_test_scratch_home_path "$DASH_ROOT" dash)
+  wt_home_abs=$(cd "$wt_home" && pwd -P)
+  fm_write_secondmate_meta "$DASH_HOME/state/dash.meta" "$wt_home_abs"
+  printf 'uncommitted\n' >> "$wt_home/AGENTS.md"
+
+  : > "$DASH_LOG"
+  rc=0
+  PATH="$DASH_FAKEBIN:$PATH" FM_ROOT_OVERRIDE="$DASH_ROOT" FM_HOME="$DASH_HOME" FM_FAKE_TMUX_LOG="$DASH_LOG" \
+    FM_FAKE_TMUX_CAPTURE="$TMP_ROOT/dash-retire-fake/pane.txt" \
+    "$ROOT/bin/fm-teardown.sh" dash >/dev/null 2>"$err" || rc=$?
+  [ "$rc" -ne 0 ] || fail "teardown retired a wt home that still has uncommitted changes"
+  [ -d "$wt_home" ] || fail "the refusal removed the dirty home"
+  grep -F 'uncommitted' "$wt_home/AGENTS.md" >/dev/null || fail "the refusal discarded the uncommitted change"
+  [ -e "$DASH_HOME/state/dash.meta" ] || fail "the refusal erased the parent record"
+  grep -F -- '- dash ' "$DASH_HOME/data/secondmates.md" >/dev/null || fail "the refusal dropped the registry route"
+  grep '^wt ' "$DASH_LOG" | grep -E -e '(^| )--force( |$)' -e '(^| )-D( |$)' >/dev/null && fail "teardown handed wt a force flag"
+  git -C "$DASH_ROOT" show-ref --verify --quiet refs/heads/fm-home/dash || fail "the refusal deleted branch fm-home/dash"
+
+  git -C "$wt_home" checkout -q -- AGENTS.md
+  : > "$DASH_LOG"
+  PATH="$DASH_FAKEBIN:$PATH" FM_ROOT_OVERRIDE="$DASH_ROOT" FM_HOME="$DASH_HOME" FM_FAKE_TMUX_LOG="$DASH_LOG" \
+    FM_FAKE_TMUX_CAPTURE="$TMP_ROOT/dash-retire-fake/pane.txt" \
+    "$ROOT/bin/fm-teardown.sh" dash >/dev/null 2>"$err" \
+    || fail "teardown failed for the clean wt home: $(cat "$err")"
+  out=$(git -C "$DASH_ROOT" worktree list --porcelain)
+  case "$out" in *fm-home-dash*) fail "the retired home is still registered as a worktree" ;; esac
+  [ ! -d "$wt_home" ] || fail "the retired home directory is still there"
+  git -C "$DASH_ROOT" show-ref --verify --quiet refs/heads/fm-home/dash && fail "branch fm-home/dash was left behind"
+  [ ! -e "$DASH_HOME/state/dash.meta" ] || fail "teardown did not clear the parent record"
+  grep -F -- '- dash ' "$DASH_HOME/data/secondmates.md" >/dev/null && fail "teardown did not remove the registry route"
+  pass "retiring a wt home refuses uncommitted work without a force flag, then removes the worktree, branch, record and route"
 }
 
 test_home_seed_rolls_back_failed_clone() {
@@ -1520,7 +1613,7 @@ test_fm_send_refuses_bare_window_without_home_meta() {
 }
 
 test_secondmate_teardown_retires_empty_home() {
-  local home subhome subhome_abs fakebin log lease fmroot
+  local home subhome subhome_abs fakebin log fmroot
   home="$TMP_ROOT/teardown-home"
   subhome="$TMP_ROOT/teardown-subhome"
   fmroot="$TMP_ROOT/teardown-fmroot"
@@ -1543,14 +1636,11 @@ EOF
   printf '%s\n' '- domain - design domain (home: '"$subhome"'; scope: design domain; projects: alpha; added 2026-06-22)' > "$home/data/secondmates.md"
   fakebin=$(make_fake_tmux "$TMP_ROOT/teardown-fake")
   log="$TMP_ROOT/teardown-fake/tmux.log"
-  lease="$TMP_ROOT/teardown-fake/lease"
-  printf 'domain\n' > "$lease"
   PATH="$fakebin:$PATH" FM_ROOT_OVERRIDE="$fmroot" FM_HOME="$home" FM_FAKE_TMUX_LOG="$log" FM_FAKE_TMUX_CAPTURE="$TMP_ROOT/teardown-fake/pane.txt" \
-    FM_FAKE_TREEHOUSE_LEASE_FILE="$lease" \
     "$ROOT/bin/fm-teardown.sh" domain >/dev/null 2>/dev/null \
     || fail "teardown failed for empty secondmate home"
-  grep -F "treehouse return --force $subhome_abs" "$log" >/dev/null || fail "teardown did not release the secondmate home lease via treehouse return"
-  [ ! -e "$lease" ] || fail "teardown left the secondmate home lease held after retirement"
+  grep -F "remove $subhome_abs --foreground" "$log" >/dev/null || fail "teardown did not remove the secondmate home with wt remove"
+  grep -E '^wt .*(--force| -D)' "$log" >/dev/null && fail "teardown handed wt a force flag"
   [ ! -d "$subhome" ] || fail "teardown did not remove the retired secondmate home"
   [ ! -e "$home/state/domain.meta" ] || fail "teardown did not clear parent meta"
   grep -F -- '- domain ' "$home/data/secondmates.md" >/dev/null && fail "teardown did not remove secondmate registry route"
@@ -1774,7 +1864,7 @@ EOF
   PATH="$fakebin:$PATH" FM_ROOT_OVERRIDE="$fmroot" FM_HOME="$home" FM_FAKE_TMUX_LOG="$log" \
     FM_FAKE_TMUX_CAPTURE="$TMP_ROOT/procevent-nested-fail-fake/pane.txt" \
     FM_FAKE_PROCEVENT_SWEEP_LOG="$sweep_log" FM_FAKE_PROCEVENT_REARM_LOG="$rearm_log" \
-    FM_FAKE_TREEHOUSE_RETURN_FAIL=1 FM_FAKE_PROCEVENT_REARM_FAIL=1 \
+    FM_FAKE_WT_REMOVE_FAIL=1 FM_FAKE_PROCEVENT_REARM_FAIL=1 \
     "$ROOT/bin/fm-teardown.sh" domain --force >/dev/null 2>"$err"
   rc=$?
   set -e
@@ -1790,7 +1880,7 @@ EOF
   pass "force teardown preserves nested process-event restoration status and recovery state"
 }
 
-test_secondmate_teardown_refuses_failed_leased_home_return() {
+test_secondmate_teardown_refuses_failed_wt_home_removal() {
   local home subhome subhome_abs fakebin log fmroot err rc sweep_log rearm_log backup
   home="$TMP_ROOT/teardown-return-fail-home"
   subhome="$TMP_ROOT/teardown-return-fail-subhome"
@@ -1824,24 +1914,24 @@ EOF
   set +e
   PATH="$fakebin:$PATH" FM_ROOT_OVERRIDE="$fmroot" FM_HOME="$home" FM_FAKE_TMUX_LOG="$log" FM_FAKE_TMUX_CAPTURE="$TMP_ROOT/teardown-return-fail-fake/pane.txt" \
     FM_FAKE_PROCEVENT_SWEEP_LOG="$sweep_log" FM_FAKE_PROCEVENT_REARM_LOG="$rearm_log" \
-    FM_FAKE_TREEHOUSE_RETURN_FAIL=1 \
+    FM_FAKE_WT_REMOVE_FAIL=1 \
     "$ROOT/bin/fm-teardown.sh" domain >/dev/null 2>"$err"
   rc=$?
   set -e
 
-  [ "$rc" -ne 0 ] || fail "teardown succeeded despite failed treehouse return"
-  grep -F "treehouse return --force $subhome_abs" "$log" >/dev/null || fail "teardown did not try to return the leased home"
-  grep -F 'treehouse return failed for secondmate home' "$err" >/dev/null || fail "teardown did not report failed leased home return"
-  [ -d "$subhome" ] || fail "teardown removed a leased home after return failed"
-  [ -e "$subhome/state/procevent/source.source" ] || fail "failed leased-home return did not restore the source registration"
-  grep -Fx "$subhome_abs" "$rearm_log" >/dev/null || fail "failed leased-home return did not rearm restored process-event sources"
-  [ -e "$home/state/domain.meta" ] || fail "teardown cleared meta after leased home return failed"
-  grep -F -- '- domain ' "$home/data/secondmates.md" >/dev/null || fail "teardown removed registry route after leased home return failed"
+  [ "$rc" -ne 0 ] || fail "teardown succeeded despite failed wt remove"
+  grep -F "remove $subhome_abs --foreground" "$log" >/dev/null || fail "teardown did not try to remove the wt home"
+  grep -F 'wt remove failed for secondmate home' "$err" >/dev/null || fail "teardown did not report the failed wt home removal"
+  [ -d "$subhome" ] || fail "teardown removed a wt home after wt remove failed"
+  [ -e "$subhome/state/procevent/source.source" ] || fail "failed wt home removal did not restore the source registration"
+  grep -Fx "$subhome_abs" "$rearm_log" >/dev/null || fail "failed wt home removal did not rearm restored process-event sources"
+  [ -e "$home/state/domain.meta" ] || fail "teardown cleared meta after wt home removal failed"
+  grep -F -- '- domain ' "$home/data/secondmates.md" >/dev/null || fail "teardown removed registry route after wt home removal failed"
 
   set +e
   PATH="$fakebin:$PATH" FM_ROOT_OVERRIDE="$fmroot" FM_HOME="$home" FM_FAKE_TMUX_LOG="$log" FM_FAKE_TMUX_CAPTURE="$TMP_ROOT/teardown-return-fail-fake/pane.txt" \
     FM_FAKE_PROCEVENT_SWEEP_LOG="$sweep_log" FM_FAKE_PROCEVENT_REARM_LOG="$rearm_log" \
-    FM_FAKE_TREEHOUSE_RETURN_FAIL=1 FM_FAKE_PROCEVENT_REARM_FAIL=1 \
+    FM_FAKE_WT_REMOVE_FAIL=1 FM_FAKE_PROCEVENT_REARM_FAIL=1 \
     "$ROOT/bin/fm-teardown.sh" domain >/dev/null 2>"$err"
   rc=$?
   set -e
@@ -1851,10 +1941,10 @@ EOF
   backup=$(find "$TMP_ROOT" -maxdepth 1 -type d -name '.fm-procevent-restore.*' \
     -exec test -e '{}/source.source' \; -print -quit)
   [ -n "$backup" ] && [ -e "$backup/source.source" ] || fail "failed process-event restoration did not retain its registration backup"
-  pass "secondmate teardown refuses to hide failed leased-home return"
+  pass "secondmate teardown refuses to hide a failed wt home removal"
 }
 
-test_secondmate_teardown_removes_plain_clone_home_without_treehouse_return() {
+test_secondmate_teardown_removes_plain_clone_home_without_wt() {
   local home subhome subhome_abs fakebin log
   home="$TMP_ROOT/plain-clone-teardown-home"
   subhome="$TMP_ROOT/plain-clone-teardown-subhome"
@@ -1878,10 +1968,10 @@ EOF
   log="$TMP_ROOT/plain-clone-teardown-fake/tmux.log"
 
   PATH="$fakebin:$PATH" FM_HOME="$home" FM_FAKE_TMUX_LOG="$log" FM_FAKE_TMUX_CAPTURE="$TMP_ROOT/plain-clone-teardown-fake/pane.txt" \
-    FM_FAKE_TREEHOUSE_RETURN_FAIL=1 \
+    FM_FAKE_WT_REMOVE_FAIL=1 \
     "$ROOT/bin/fm-teardown.sh" domain >/dev/null 2>/dev/null \
     || fail "teardown failed for plain-clone secondmate home"
-  grep -F "treehouse return --force $subhome_abs" "$log" >/dev/null && fail "teardown tried to return a plain-clone home through treehouse"
+  grep -F "remove $subhome_abs" "$log" >/dev/null && fail "teardown tried to remove a plain-clone home through wt"
   [ ! -d "$subhome" ] || fail "teardown did not remove the plain-clone secondmate home"
   [ ! -e "$home/state/domain.meta" ] || fail "teardown did not clear parent meta for plain-clone home"
   grep -F -- '- domain ' "$home/data/secondmates.md" >/dev/null && fail "teardown did not remove plain-clone registry route"
@@ -1936,17 +2026,15 @@ EOF
   pass "secondmate force teardown discards child work"
 }
 
-test_secondmate_force_teardown_refuses_duplicated_child_slot() {
+test_secondmate_force_teardown_refuses_duplicated_child_worktree() {
   local home subhome childproj childwt fakebin log err rc
   home="$TMP_ROOT/force-duplicate-slot-home"
   subhome="$TMP_ROOT/force-duplicate-slot-subhome"
   childproj="$subhome/projects/alpha"
-  childwt="$TMP_ROOT/force-duplicate-slot-pool/1/alpha"
+  childwt="$TMP_ROOT/force-duplicate-child-worktree/alpha"
   err="$TMP_ROOT/force-duplicate-slot.err"
   mkdir -p "$home/state" "$home/data" "$subhome/state" "$(dirname "$childwt")"
   fm_git_worktree "$childproj" "$childwt" duplicate-child
-  printf '{"worktrees":[{"name":"1","path":"%s"}]}\n' "$childwt" \
-    > "$TMP_ROOT/force-duplicate-slot-pool/treehouse-state.json"
   printf 'domain\n' > "$subhome/.fm-secondmate-home"
   cat > "$home/state/domain.meta" <<EOF
 window=firstmate:fm-domain
@@ -1980,14 +2068,14 @@ EOF
     "$ROOT/bin/fm-teardown.sh" domain --force >/dev/null 2>"$err"
   rc=$?
   set -e
-  [ "$rc" -ne 0 ] || fail "forced secondmate teardown returned a duplicated child slot"
-  [ -d "$childwt" ] || fail "forced secondmate teardown removed the duplicated child slot"
+  [ "$rc" -ne 0 ] || fail "forced secondmate teardown removed a duplicated child worktree"
+  [ -d "$childwt" ] || fail "forced secondmate teardown removed the duplicated child worktree"
   [ -e "$subhome/state/stale-child.meta" ] || fail "forced secondmate teardown removed the stale child record"
   [ -e "$subhome/state/live-child.meta" ] || fail "forced secondmate teardown removed the live child record"
-  grep -F 'kill-window' "$log" >/dev/null && fail "forced secondmate teardown killed a child before detecting its slot collision"
+  grep -F 'kill-window' "$log" >/dev/null && fail "forced secondmate teardown killed a child before detecting its worktree collision"
   grep -F 'live-child' "$err" >/dev/null || grep -F 'stale-child' "$err" >/dev/null \
-    || fail "forced secondmate teardown did not identify the duplicated child slot"
-  pass "forced secondmate teardown refuses duplicated descendant pool slots"
+    || fail "forced secondmate teardown did not identify the duplicated child worktree"
+  pass "forced secondmate teardown refuses duplicated descendant worktrees"
 }
 
 test_secondmate_force_teardown_preserves_child_on_unproven_lock() {
@@ -1995,12 +2083,10 @@ test_secondmate_force_teardown_preserves_child_on_unproven_lock() {
   home="$TMP_ROOT/force-lock-home"
   subhome="$TMP_ROOT/force-lock-subhome"
   childproj="$subhome/projects/alpha"
-  childwt="$TMP_ROOT/force-lock-child-pool/1/alpha"
+  childwt="$TMP_ROOT/force-lock-child-worktree/alpha"
   err="$TMP_ROOT/force-lock-child.err"
   mkdir -p "$home/state" "$home/data" "$subhome/state" "$(dirname "$childwt")"
   fm_git_worktree "$childproj" "$childwt" force-child-lock
-  printf '{"worktrees":[{"name":"1","path":"%s"}]}\n' "$childwt" \
-    > "$TMP_ROOT/force-lock-child-pool/treehouse-state.json"
   printf 'domain\n' > "$subhome/.fm-secondmate-home"
   cat > "$home/state/domain.meta" <<EOF
 window=firstmate:fm-domain
@@ -2025,37 +2111,39 @@ yolo=off
 EOF
   fakebin=$(make_fake_tmux "$TMP_ROOT/force-lock-child-fake")
   log="$TMP_ROOT/force-lock-child-fake/tmux.log"
-  cat > "$fakebin/treehouse" <<'SH'
+  # wt refuses to remove a worktree while its index.lock exists; otherwise the real
+  # wt removes it (scratch config, as in every fakebin wt).
+  cat > "$fakebin/wt" <<SH
 #!/usr/bin/env bash
 set -u
-printf 'treehouse %s\n' "$*" >> "${FM_FAKE_TMUX_LOG:-/dev/null}"
-case "${1:-}" in
-  return)
-    shift
-    target=
-    while [ $# -gt 0 ]; do
-      case "$1" in
-        --force) ;;
-        *) target=$1 ;;
-      esac
-      shift
-    done
-    lock=$(git -C "$target" rev-parse --git-path index.lock 2>/dev/null || true)
-    if [ -n "$lock" ] && [ -e "$lock" ]; then
-      echo "fatal: Unable to create '$lock': File exists." >&2
-      exit 128
-    fi
-    [ -n "$target" ] && rm -rf -- "$target"
-    exit 0
-    ;;
-esac
-exit 0
+printf 'wt %s\\n' "\$*" >> "\${FM_FAKE_TMUX_LOG:-/dev/null}"
+case " \$* " in *" remove "*) ;; *) exit 0 ;; esac
+target=
+seen_remove=0
+skip=0
+for a in "\$@"; do
+  if [ "\$skip" = 1 ]; then skip=0; continue; fi
+  case "\$a" in
+    -C) skip=1 ;;
+    remove) seen_remove=1 ;;
+    -*) ;;
+    *) [ "\$seen_remove" = 1 ] && [ -z "\$target" ] && target=\$a ;;
+  esac
+done
+lock=\$(git -C "\$target" rev-parse --git-path index.lock 2>/dev/null || true)
+case "\$lock" in /*|'') ;; *) lock="\$target/\$lock" ;; esac
+if [ -n "\$lock" ] && [ -e "\$lock" ]; then
+  echo "fatal: Unable to create '\$lock': File exists." >&2
+  exit 128
+fi
+export XDG_CONFIG_HOME="$TMP_ROOT/force-lock-child-fake/wt-xdg"
+exec "$(command -v wt)" "\$@"
 SH
   cat > "$fakebin/lsof" <<'SH'
 #!/usr/bin/env bash
 exit 0
 SH
-  chmod +x "$fakebin/treehouse" "$fakebin/lsof"
+  chmod +x "$fakebin/wt" "$fakebin/lsof"
   lock=$(git -C "$childwt" rev-parse --git-path index.lock)
   mkdir -p "$(dirname "$lock")"
   : > "$lock"
@@ -2068,7 +2156,7 @@ SH
   rc=$?
   set -e
 
-  [ "$rc" -ne 0 ] || fail "force teardown succeeded after child treehouse refused an unproven lock"
+  [ "$rc" -ne 0 ] || fail "force teardown succeeded after wt refused a child worktree with an unproven lock"
   [ -d "$childwt" ] || fail "force teardown raw-removed child worktree after unproven lock refusal"
   [ -e "$lock" ] || fail "force teardown removed unproven child index.lock"
   [ -d "$subhome" ] || fail "force teardown removed subhome after child lock refusal"
@@ -2963,10 +3051,13 @@ test_home_seed_refuses_unreadable_registry
 test_home_seed_validate_rejects_duplicate_homes
 test_home_seed_validate_rejects_duplicate_ids
 test_home_seed_validate_rejects_nested_homes
-test_home_seed_uses_treehouse_acquired_home
-test_home_seed_returns_treehouse_acquired_home_on_assignment_failure
-test_home_seed_warns_when_acquired_home_return_fails
-test_home_seed_does_not_return_unsafe_acquired_home
+test_home_seed_creates_a_wt_home_on_the_id_branch
+test_home_seed_is_idempotent_for_the_same_id
+test_home_seed_rolls_back_a_freshly_created_wt_home_on_failure
+test_home_seed_warns_when_rolling_back_the_wt_home_fails
+test_home_seed_never_removes_a_preexisting_wt_home_it_rejects
+test_home_seed_does_not_remove_an_unsafe_wt_home
+test_secondmate_teardown_refuses_a_dirty_wt_home_then_retires_it_clean
 test_home_seed_rolls_back_failed_clone
 test_home_seed_refuses_missing_filled_charter
 test_home_seed_refuses_placeholder_charter
@@ -3007,10 +3098,10 @@ test_secondmate_teardown_refuses_process_events_without_sweep_script
 test_secondmate_teardown_preserves_process_events_on_later_refusal
 test_secondmate_force_teardown_sweeps_nested_homes
 test_secondmate_force_teardown_preserves_nested_restore_status
-test_secondmate_teardown_refuses_failed_leased_home_return
-test_secondmate_teardown_removes_plain_clone_home_without_treehouse_return
+test_secondmate_teardown_refuses_failed_wt_home_removal
+test_secondmate_teardown_removes_plain_clone_home_without_wt
 test_secondmate_force_teardown_discards_child_work
-test_secondmate_force_teardown_refuses_duplicated_child_slot
+test_secondmate_force_teardown_refuses_duplicated_child_worktree
 test_secondmate_force_teardown_preserves_child_on_unproven_lock
 test_secondmate_force_teardown_allows_non_state_operational_dir_symlinks_inside_home
 test_secondmate_force_teardown_refuses_operational_dir_symlink_outside_home

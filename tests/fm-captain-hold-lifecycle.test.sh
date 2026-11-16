@@ -31,7 +31,8 @@ make_home() {  # <name>
 ## Done
 EOF
   fakebin=$(fm_fakebin "$home")
-  fm_fake_exit0 "$fakebin" tmux treehouse no-mistakes gh gh-axi
+  fm_fake_exit0 "$fakebin" tmux no-mistakes gh gh-axi
+  fm_fake_version_tool "$fakebin" wt FM_FAKE_WT_VERSION 0.82.0
   printf '%s\n' "$home"
 }
 
@@ -240,7 +241,8 @@ archive = "data/done-archive.md"
 done_keep = 10
 EOF
   fb=$(fm_fakebin "$home")
-  fm_fake_exit0 "$fb" tmux treehouse no-mistakes gh gh-axi
+  fm_fake_exit0 "$fb" tmux no-mistakes gh gh-axi
+  fm_fake_version_tool "$fb" wt FM_FAKE_WT_VERSION 0.82.0
   printf '%s\n' "$home|$graph/.beads"
 }
 
@@ -1289,7 +1291,8 @@ test_secondmate_hold_stays_in_authoritative_home() {
 ## Done
 EOF
   fakebin=$(fm_fakebin "$mate")
-  fm_fake_exit0 "$fakebin" tmux treehouse no-mistakes gh gh-axi
+  fm_fake_exit0 "$fakebin" tmux no-mistakes gh gh-axi
+  fm_fake_version_tool "$fakebin" wt FM_FAKE_WT_VERSION 0.82.0
   origin=sample-mate-review
   mkdir -p "$mate/data/$origin"
   tasks_in "$mate" add "$origin" "Investigate secondmate sample" --kind scout --repo sample --start >/dev/null
@@ -1346,7 +1349,8 @@ test_secondmate_home_publishes_holds_and_answers() {
 ## Done
 EOF
   fakebin=$(fm_fakebin "$mate")
-  fm_fake_exit0 "$fakebin" tmux treehouse no-mistakes gh gh-axi
+  fm_fake_exit0 "$fakebin" tmux no-mistakes gh gh-axi
+  fm_fake_version_tool "$fakebin" wt FM_FAKE_WT_VERSION 0.82.0
   channel="$parent/state/channel-mate.status"
   decision="$mate/decision.txt"
 
@@ -2868,11 +2872,11 @@ test_interrupted_cleanup_keeps_the_captain_call_recoverable() {
     || fail "could not hold the cleanup-failure fixture"
   run_captain "$home" complete "$id" "$id" >/dev/null \
     || fail "completion gate failed for the cleanup-failure fixture"
-  cat > "$home/fakebin/treehouse" <<'SH'
+  cat > "$home/fakebin/wt" <<'SH'
 #!/usr/bin/env bash
 exit 1
 SH
-  chmod +x "$home/fakebin/treehouse"
+  chmod +x "$home/fakebin/wt"
 
   set +e
   PATH="$home/fakebin:$PATH" FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$home" \
@@ -2881,7 +2885,7 @@ SH
     > "$home/teardown.out" 2> "$home/teardown.err"
   rc=$?
   set -e
-  [ "$rc" -ne 0 ] || fail "cleanup succeeded despite the failed worktree return"
+  [ "$rc" -ne 0 ] || fail "cleanup succeeded despite the failed worktree removal"
   assert_present "$home/state/$id.meta" "a failed cleanup removed the task record"
   assert_present "$home/state/$id.backlog-close" \
     "a failed cleanup lost the pending record that replays the retention"
@@ -2891,7 +2895,7 @@ SH
   assert_not_contains "$show" "Deliverable of the finished work" \
     "the deliverable was recorded before destructive cleanup succeeded"
 
-  fm_fake_exit0 "$home/fakebin" treehouse
+  fm_fake_version_tool "$home/fakebin" wt FM_FAKE_WT_VERSION 0.82.0
   bootstrap=$(PATH="$home/fakebin:$PATH" FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$home" \
     FM_STATE_OVERRIDE="$home/state" FM_DATA_OVERRIDE="$home/data" \
     FM_CONFIG_OVERRIDE="$home/config" FM_BOOTSTRAP_NETWORK=skip \
@@ -2927,11 +2931,11 @@ test_answer_before_cleanup_replay_preserves_the_retained_report() {
     >/dev/null || fail "could not hold the answer-before-replay fixture"
   run_captain "$home" complete "$id" "$id" >/dev/null \
     || fail "completion gate failed for the answer-before-replay fixture"
-  cat > "$home/fakebin/treehouse" <<'SH'
+  cat > "$home/fakebin/wt" <<'SH'
 #!/usr/bin/env bash
 exit 1
 SH
-  chmod +x "$home/fakebin/treehouse"
+  chmod +x "$home/fakebin/wt"
 
   set +e
   PATH="$home/fakebin:$PATH" FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$home" \
@@ -2940,14 +2944,14 @@ SH
     > "$home/teardown.out" 2> "$home/teardown.err"
   rc=$?
   set -e
-  [ "$rc" -ne 0 ] || fail "cleanup succeeded despite the failed worktree return"
+  [ "$rc" -ne 0 ] || fail "cleanup succeeded despite the failed worktree removal"
   assert_present "$home/state/$id.backlog-close" \
     "the interrupted cleanup lost its retained-artifact record"
 
   printf 'Proceed with the reported result.\n' > "$home/answer.txt"
   run_captain "$home" answer "$id" --decision-file "$home/answer.txt" >/dev/null \
     || fail "the captain could not answer before cleanup replay"
-  fm_fake_exit0 "$home/fakebin" treehouse
+  fm_fake_version_tool "$home/fakebin" wt FM_FAKE_WT_VERSION 0.82.0
   bootstrap=$(PATH="$home/fakebin:$PATH" FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$home" \
     FM_STATE_OVERRIDE="$home/state" FM_DATA_OVERRIDE="$home/data" \
     FM_CONFIG_OVERRIDE="$home/config" FM_BOOTSTRAP_NETWORK=skip \
@@ -2981,11 +2985,11 @@ test_unusable_pending_close_record_names_its_reason() {
     >/dev/null || fail "could not hold the unusable pending-close fixture"
   run_captain "$home" complete "$id" "$id" >/dev/null \
     || fail "completion gate failed for the unusable pending-close fixture"
-  cat > "$home/fakebin/treehouse" <<'SH'
+  cat > "$home/fakebin/wt" <<'SH'
 #!/usr/bin/env bash
 exit 1
 SH
-  chmod +x "$home/fakebin/treehouse"
+  chmod +x "$home/fakebin/wt"
 
   set +e
   PATH="$home/fakebin:$PATH" FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$home" \
@@ -2994,7 +2998,7 @@ SH
     > "$home/teardown.out" 2> "$home/teardown.err"
   rc=$?
   set -e
-  [ "$rc" -ne 0 ] || fail "cleanup succeeded despite the failed worktree return"
+  [ "$rc" -ne 0 ] || fail "cleanup succeeded despite the failed worktree removal"
   assert_present "$marker" "the interrupted cleanup lost its retained-artifact record"
   sed "s|^data=.*$|data=$home/elsewhere|" "$marker" > "$marker.rewritten" \
     || fail "could not rewrite the pending-close record"
@@ -3045,11 +3049,11 @@ EOF
     FM_DATA_OVERRIDE="$data" FM_CONFIG_OVERRIDE="$home/config" \
     "$ROOT/bin/fm-captain-hold.sh" complete "$id" "$id" >/dev/null \
     || fail "completion gate failed for the relocated answer-before-replay fixture"
-  cat > "$home/fakebin/treehouse" <<'SH'
+  cat > "$home/fakebin/wt" <<'SH'
 #!/usr/bin/env bash
 exit 1
 SH
-  chmod +x "$home/fakebin/treehouse"
+  chmod +x "$home/fakebin/wt"
 
   set +e
   PATH="$home/fakebin:$PATH" FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$home" \
@@ -3058,7 +3062,7 @@ SH
     > "$home/teardown.out" 2> "$home/teardown.err"
   rc=$?
   set -e
-  [ "$rc" -ne 0 ] || fail "relocated cleanup succeeded despite the failed worktree return"
+  [ "$rc" -ne 0 ] || fail "relocated cleanup succeeded despite the failed worktree removal"
   assert_present "$home/state/$id.backlog-close" \
     "the interrupted relocated cleanup lost its pending record"
 
@@ -3072,7 +3076,7 @@ SH
   assert_contains "$show" "state: done" "the relocated report kept the answered call open"
   assert_contains "$show" "held: no" "the relocated report kept the answered call held"
 
-  fm_fake_exit0 "$home/fakebin" treehouse
+  fm_fake_version_tool "$home/fakebin" wt FM_FAKE_WT_VERSION 0.82.0
   bootstrap=$(PATH="$home/fakebin:$PATH" FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$home" \
     FM_STATE_OVERRIDE="$home/state" FM_DATA_OVERRIDE="$data" \
     FM_CONFIG_OVERRIDE="$home/config" FM_BOOTSTRAP_NETWORK=skip \

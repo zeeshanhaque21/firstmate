@@ -87,15 +87,7 @@ SH
 exit 0
 SH
   chmod +x "$fakebin/gh"
-  cat > "$fakebin/treehouse" <<'SH'
-#!/usr/bin/env bash
-if [ "${1:-}" = get ] && [ "${2:-}" = --help ]; then
-  printf '%s\n' 'Usage: treehouse get [--lease]'
-  exit 0
-fi
-exit 0
-SH
-  chmod +x "$fakebin/treehouse"
+  fm_fake_version_tool "$fakebin" wt FM_FAKE_WT_VERSION 0.82.0
   cat > "$fakebin/no-mistakes" <<'SH'
 #!/usr/bin/env bash
 if [ "${1:-}" = --version ]; then
@@ -1081,7 +1073,7 @@ SH
     assert_not_contains "$out" "MISSING: tmux" "Herdr session start falsely required masked tmux"
     assert_not_contains "$out" "MISSING: herdr" "Herdr session start missed its available session CLI"
     assert_not_contains "$out" "MISSING: jq" "Herdr session start missed its available JSON dependency"
-    assert_not_contains "$out" "MISSING: treehouse" "Herdr session start missed its available worktree provider"
+    assert_not_contains "$out" "MISSING: wt" "Herdr session start missed its available worktree provider"
   done
   pass "session start: configured and auto-detected Herdr homes never require tmux"
 }
