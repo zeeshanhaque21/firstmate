@@ -145,6 +145,7 @@ test_brief_assertion_precedes_branch() {
   assert_no_grep 'git checkout -b fm/' "$brief" \
     "the brief must not tell the worker to create a branch wt already created"
   iso=$(grep -n 'launched in primary checkout, not an isolated worktree' "$brief" | head -1 | cut -d: -f1)
+  # shellcheck disable=SC2016 # Backticks are literal brief markup.
   br=$(grep -n 'confirm you are on your branch `fm/tangle-brief-cc3` with `git branch --show-current`' "$brief" | head -1 | cut -d: -f1)
   if [ -z "$iso" ] || [ -z "$br" ]; then
     fail "brief missing assertion ($iso) or branch confirmation step ($br)"
