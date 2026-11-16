@@ -119,6 +119,8 @@ Capture, current path, and composer reads stay label-optional because they chang
   A present terminal that does not carry them (the label defaults to any task label of this home) is `ambiguous`, never `dead` or `missing`, so an address that now names someone else's terminal cannot license a relaunch.
 - A shell foreground whose process group cannot be read, because the leader vanished or `ps` failed, is `ambiguous`, not `dead`.
   A zombie in that group runs nothing and never counts as an agent.
+- An aborted spawn closes the terminal it created, through the same guarded close, while no task record exists and the terminal still carries the task's labels, so the retry is not refused as a duplicate.
+  Once the record is published the record owns the terminal and an abort leaves it for teardown and recovery.
 - Right after a terminal starts, `hc get` can report no foreground process yet, and agent state reads `unreadable` until the shell is up.
 - `--secondmate` spawns are refused.
 - A worker inherits `HC_SESSION`, `HC_TERMINAL_ID`, `HC_TERMINAL_SOCKET`, and `HC_SCOPE` from its terminal, and the `config/launch-env-allowlist` floor keeps them; whether a real harness then reports native status under Firstmate's launch is not verified.
@@ -128,7 +130,7 @@ Capture, current path, and composer reads stay label-optional because they chang
 
 ## Tests
 
-`tests/fm-backend-hc.test.sh` pins the adapter against a fake `hc`.
+`tests/fm-backend-hc.test.sh` pins the adapter against a fake `hc`, and `tests/fm-spawn-hc-abort.test.sh` pins the aborted-spawn cleanup through a real `bin/fm-spawn.sh` run against the same kind of fake.
 `tests/fm-backend-hc-liveness-live-e2e.test.sh` is the default-on live guard: it launches every installed harness bare in a private core and requires `alive`.
 `tests/fm-backend-hc-smoke.test.sh` drives the real binary in an isolated lab; [`bin/fm-hc-lab.sh`](../bin/fm-hc-lab.sh) owns the isolation and metadata-tripwire contract, and [`tests/hc-test-safety.sh`](../tests/hc-test-safety.sh) owns guarded test teardown.
 `tests/fm-backend-hc-appdetect-smoke.test.sh` runs a real `bin/fm-spawn.sh` spawn in the same kind of lab for the app-terminal and explicit cases, and checks that a live app window never selects hc for a marker-less process and starts nothing for a session with no running core.

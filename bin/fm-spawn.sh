@@ -1732,6 +1732,7 @@ CONFIG_INHERIT_LOCK_HELD=0
 GIT_HOOKS_DIR=
 SPAWN_LAUNCH_SENT=0
 SPAWN_ENDPOINT_CLOSED=0
+SPAWN_HC_TERMINAL=
 SPAWN_STAGED_LAUNCH_FILE=
 
 spawn_fresh_commit_rollback() {
@@ -1925,6 +1926,20 @@ spawn_abort_cleanup() {
   if [ "$SPAWN_META_LOCK_HELD" = 1 ]; then
     SPAWN_META_LOCK_HELD=0
     fm_lock_release "$SPAWN_META_LOCK" || true
+  fi
+  # An hc terminal this very run created, closed while no task record exists, so
+  # a retry of the same task id is not refused as a duplicate. The guarded kill
+  # closes it only while it still carries this task's exact labels and this
+  # home's tag; anything else is left for the operator.
+  if [ "$status" -ne 0 ] && [ -n "$SPAWN_HC_TERMINAL" ] &&
+    [ ! -e "$STATE/$ID.meta" ] && [ ! -L "$STATE/$ID.meta" ]; then
+    local spawn_hc_terminal=$SPAWN_HC_TERMINAL
+    SPAWN_HC_TERMINAL=
+    if fm_backend_kill hc "$spawn_hc_terminal" "" "$W" >/dev/null 2>&1; then
+      SPAWN_ENDPOINT_CLOSED=1
+    else
+      echo "warning: aborted spawn of $ID left hc terminal $spawn_hc_terminal in place; inspect it with hc ls before retrying" >&2
+    fi
   fi
   # A fresh polytoken spawn that fails and leaves no record must leave the pool
   # as it found it. Before its launch is delivered, the endpoint it opened holds nothing but
@@ -2537,7 +2552,7 @@ if [ "$RELAUNCH" -eq 1 ]; then
   # owns that vocabulary). The proof itself lives in one place for the whole
   # control plane - fm_control_endpoint_absence_verdict - so `exit` and
   # `relaunch` cannot reach two different answers about one endpoint.
-  RELAUNCH_STATE=$(fm_backend_agent_state "$BACKEND" "$RELAUNCH_TARGET")
+  RELAUNCH_STATE=$(fm_backend_agent_state "$BACKEND" "$RELAUNCH_TARGET" "fm-$ID")
   if fm_control_absence_recheck_applies "$BACKEND" "$RELAUNCH_STATE"; then
     RELAUNCH_ABSENCE=$(fm_control_endpoint_absence_verdict "$BACKEND" "$RELAUNCH_TARGET" "$RELAUNCH_META")
     case "${RELAUNCH_ABSENCE%%$'\t'*}" in
@@ -5377,6 +5392,9 @@ EOF
     HC_SES=$(fm_backend_hc_container_ensure) || exit 1
     HC_TERMINAL=$(fm_backend_hc_create_task "$HC_SES" "$W" "$PROJ_ABS") || exit 1
     T="$HC_SES:$HC_TERMINAL"
+    # Recorded for spawn_abort_cleanup: an hc terminal outlives this process, and
+    # fm_backend_hc_create_task refuses a retry of the same task while it lives.
+    SPAWN_HC_TERMINAL=$T
     ;;
   orca)
     set +e
@@ -7448,6 +7466,8 @@ if [ "$RELAUNCH" -eq 0 ]; then
     exit 1
   fi
   SPAWN_META_TMP=
+  # The record now owns the terminal; teardown and recovery close it from here.
+  SPAWN_HC_TERMINAL=
 fi
 
 # Fuse the backlog In-flight transition into the publication that just created
