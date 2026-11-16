@@ -221,7 +221,12 @@ test_project_without_origin_uses_local_default() {
   local id=wt-noorigin-z7 out status
   new_case noorigin
   git -C "$PROJ" remote remove origin
-  out=$(run_spawn "$id"); status=$?
+  # Run from a directory that is itself a repo WITH an origin. git reports a repo's own config as the
+  # relative path .git/config, and resolving that against the caller's cwd once made a project with no
+  # origin look like it had one whenever the caller sat inside a repo that does.
+  git init -q "$CASE/decoy"
+  git -C "$CASE/decoy" remote add origin "$CASE/decoy-origin.invalid"
+  out=$(cd "$CASE/decoy" && run_spawn "$id"); status=$?
   expect_code 0 "$status" "a project with no origin must spawn from its local default branch"$'\n'"$out"
   worktree_for_branch "fm/$id" || fail "no worktree for a project without origin"
   pass "a project without origin spawns from the local default branch"

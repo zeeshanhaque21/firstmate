@@ -2752,6 +2752,10 @@ spawn_worktree_has_origin_config() { # <worktree>
   git -C "$worktree" config --get-regexp '^remote\.origin\.' >/dev/null 2>&1 && return 0
   while IFS=$'\t' read -r origin key; do
     case $origin in file:*) config=${origin#file:} ;; *) continue ;; esac
+    # git prints the repository's own config as a path relative to -C, so anchor it to the project;
+    # resolving it against the caller's cwd made any caller sitting inside a repo that has an origin
+    # see an origin on a project that has none.
+    case $config in /*) ;; *) config="$worktree/$config" ;; esac
     [ -f "$config" ] || continue
     case $seen in *$'\n'"$config"$'\n'*) continue ;; esac
     seen+="$config"$'\n'
