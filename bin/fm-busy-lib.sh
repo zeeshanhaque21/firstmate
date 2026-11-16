@@ -957,7 +957,7 @@ fm_busy_classify() {  # <backend> <target> <harness> <id> <state-dir> [tail40]
     grok*)
       if [ -z "$tail40" ]; then
         if command -v fm_backend_capture >/dev/null 2>&1; then
-          tail40=$(fm_backend_capture "$backend" "$target" 40 2>/dev/null) || {
+          tail40=$(fm_backend_capture "$backend" "$target" 40 "fm-$id" 2>/dev/null) || {
             printf 'unknown capture-failed'
             return 0
           }
@@ -976,7 +976,7 @@ fm_busy_classify() {  # <backend> <target> <harness> <id> <state-dir> [tail40]
     rovo*)
       if [ -z "$tail40" ]; then
         if command -v fm_backend_capture >/dev/null 2>&1; then
-          tail40=$(fm_backend_capture "$backend" "$target" 40 2>/dev/null) || {
+          tail40=$(fm_backend_capture "$backend" "$target" 40 "fm-$id" 2>/dev/null) || {
             printf 'unknown capture-failed'
             return 0
           }
@@ -998,7 +998,7 @@ fm_busy_classify() {  # <backend> <target> <harness> <id> <state-dir> [tail40]
     agy)
       if [ -z "$tail40" ]; then
         if command -v fm_backend_capture >/dev/null 2>&1; then
-          tail40=$(fm_backend_capture "$backend" "$target" 40 2>/dev/null) || {
+          tail40=$(fm_backend_capture "$backend" "$target" 40 "fm-$id" 2>/dev/null) || {
             printf 'unknown capture-failed'
             return 0
           }

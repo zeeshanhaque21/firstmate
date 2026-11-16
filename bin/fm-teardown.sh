@@ -882,7 +882,7 @@ MODE=$(grep '^mode=' "$META" | cut -d= -f2- || true)
 # passed, immediately before the close marker binds to it, so any refusal
 # leaves the record byte-identical.
 if [ "$TEARDOWN_LEGACY_PENDING" = 1 ]; then
-  TEARDOWN_LEGACY_ENDPOINT=$(fm_backend_agent_state "$BACKEND" "$T")
+  TEARDOWN_LEGACY_ENDPOINT=$(fm_backend_agent_state "$BACKEND" "$T" "fm-$ID")
   case "$TEARDOWN_LEGACY_ENDPOINT" in
     dead|missing) ;;
     *)
@@ -2292,11 +2292,17 @@ EOF
   printf '%s\n' "$abs_home_path"
 }
 
-# Explicit discard authority only (--force): drop uncommitted changes so that
-# `wt remove`, which itself never discards them, can proceed. Best effort; a
-# worktree that is still dirty afterwards is refused by wt.
-discard_worktree_changes() {
-  local dir=$1
+# Discard authority only (explicit --force, or a scout's declared scratch
+# worktree): drop uncommitted changes so that `wt remove`, which itself never
+# discards them, can proceed. Only a linked worktree registered to the project is
+# ever touched, never its primary checkout. Best effort; a worktree that is still
+# dirty afterwards is refused by wt.
+discard_worktree_changes() {  # <dir> <project>
+  local dir=$1 project=$2 primary abs_dir
+  worktree_registered_for_project "$project" "$dir" || return 0
+  primary=$(git -C "$project" rev-parse --show-toplevel 2>/dev/null) || return 0
+  abs_dir=$(removal_target_abs_path "$dir")
+  [ "$abs_dir" != "$(removal_target_abs_path "$primary")" ] || return 0
   git -C "$dir" reset --hard -q >/dev/null 2>&1 || true
   git -C "$dir" clean -fdq >/dev/null 2>&1 || true
 }
@@ -2349,7 +2355,7 @@ remove_firstmate_home() {
       return 1
     }
     home_branch=$(git -C "$abs_home_path" symbolic-ref --short -q HEAD 2>/dev/null || true)
-    [ "$FORCE" != "--force" ] || discard_worktree_changes "$abs_home_path"
+    [ "$FORCE" != "--force" ] || discard_worktree_changes "$abs_home_path" "$FM_ROOT"
     teardown_worktree_remove "$abs_home_path" "$FM_ROOT" "$label" || {
       echo "error: wt remove failed for $label $abs_home_path; the home was left in place" >&2
       restore_firstmate_home_process_events "$abs_home_path" "$label" "$process_event_backup" || return $?
@@ -2866,7 +2872,7 @@ cleanup_firstmate_home_children() {
         echo "error: wt command not found; cannot remove child worktree $child_wt" >&2
         return 1
       }
-      discard_worktree_changes "$child_wt"
+      discard_worktree_changes "$child_wt" "$child_proj"
       teardown_worktree_remove "$child_wt" "$child_proj" "child worktree" || {
         child_remove_rc=$?
         echo "error: wt remove failed for child worktree $child_wt; the child was left in place" >&2
@@ -3175,7 +3181,9 @@ elif [ -d "$WT" ] && [ "$KIND" != secondmate ]; then
   # (the captain's discard authority) drops the uncommitted changes first.
   # teardown_worktree_remove tolerates transient and stale git locks left by a
   # killed crew process; see the script header for retry and stale-lock proof.
-  [ "$FORCE" != "--force" ] || discard_worktree_changes "$WT"
+  if [ "$FORCE" = "--force" ] || [ "$KIND" = scout ]; then
+    discard_worktree_changes "$WT" "$PROJ"
+  fi
   post_lock_cleanup_check=
   if [ "$FORCE" != "--force" ] && [ "$KIND" != scout ] && [ "$KIND" != secondmate ]; then
     post_lock_cleanup_check=validate_worktree_teardown_safety

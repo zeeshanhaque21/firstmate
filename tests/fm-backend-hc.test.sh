@@ -315,10 +315,12 @@ test_actions_refuse_unexpected_names_before_sending_input() {
   v=$(fm_backend_hc_send_text_submit t8 x 3 0 0 2>/dev/null)
   [ "$v" = send-failed ] || fail "send_text_submit without a label must report send-failed, got '$v'"
   [ "$(log_count send)" = 0 ] && [ "$(log_count keys)" = 0 ] || fail "label-less actions must send nothing"
+  get_json t7 fm-task1 live "$ZSH_FG"
+  [ "$(fm_backend_hc_agent_state t7)" = unreadable ] || fail "a fm- terminal with no label must read unreadable, never dead"
   get_json_unnamed t7 live "$ZSH_FG"
-  [ "$(fm_backend_hc_agent_state t7)" = ambiguous ] || fail "unnamed terminal with no label must read ambiguous"
+  [ "$(fm_backend_hc_agent_state t7)" = unreadable ] || fail "unnamed terminal with no label must read unreadable"
   get_json t7 captain live "$ZSH_FG"
-  [ "$(fm_backend_hc_agent_state t7)" = ambiguous ] || fail "non-fm terminal with no label must read ambiguous"
+  [ "$(fm_backend_hc_agent_state t7)" = unreadable ] || fail "non-fm terminal with no label must read unreadable"
   # A definitively absent address stays `missing`.
   rm -f "$FM_HC_RESP/get.t7"
   [ "$(fm_backend_hc_agent_state t7 fm-task1)" = missing ] || fail "not_found must read missing"
@@ -353,16 +355,15 @@ test_capture_bounds_lines() {
   reset
   get_json t8 fm-abc live "$ZSH_FG"
   printf 'l1\nl2\nl3\nl4\nl5\nl6\n' > "$FM_HC_RESP/read.t8"
-  out=$(fm_backend_hc_capture t8 3) || fail "capture failed"
-  [ "$out" = $'l4\nl5\nl6' ] || fail "capture should keep the last 3 lines, got '$out'"
-  log_has read t8 --lines 3 || fail "capture should pass --lines 3 to hc read"
-  out=$(fm_backend_hc_capture t8 100) || fail "capture 100 failed"
-  [ "$(printf '%s\n' "$out" | wc -l | tr -d ' ')" = 6 ] || fail "short screens return all lines"
-  fm_backend_hc_capture t8 abc >/dev/null || fail "non-numeric lines should default"
-  log_has read t8 --lines 200 || fail "non-numeric lines should default to 200"
+  if fm_backend_hc_capture t8 3 >/dev/null 2>&1; then fail "capture must refuse a terminal with no expected label"; fi
   cp "$FM_HC_RESP/read.t8" "$FM_HC_RESP/read.fm-abc"
-  fm_backend_hc_capture t8 3 fm-abc >/dev/null || fail "labelled capture failed"
-  log_has read fm-abc --lines 3 || fail "labelled capture should read by NAME"
+  out=$(fm_backend_hc_capture t8 3 fm-abc) || fail "capture failed"
+  [ "$out" = $'l4\nl5\nl6' ] || fail "capture should keep the last 3 lines, got '$out'"
+  log_has read fm-abc --lines 3 || fail "capture should pass --lines 3 to hc read by NAME"
+  out=$(fm_backend_hc_capture t8 100 fm-abc) || fail "capture 100 failed"
+  [ "$(printf '%s\n' "$out" | wc -l | tr -d ' ')" = 6 ] || fail "short screens return all lines"
+  fm_backend_hc_capture t8 abc fm-abc >/dev/null || fail "non-numeric lines should default"
+  log_has read fm-abc --lines 200 || fail "non-numeric lines should default to 200"
   : > "$FM_HC_LOG"
   if fm_backend_hc_capture 't8;x' 3 >/dev/null 2>&1; then fail "capture must refuse a bad target"; fi
   if fm_backend_hc_capture t8 3 fm-nope >/dev/null 2>&1; then fail "capture must refuse a different name"; fi
@@ -489,7 +490,7 @@ test_target_exists() {
   reset
   get_json t8 fm-abc live "$ZSH_FG"
   fm_backend_hc_target_exists t8 fm-abc || fail "target_exists: live terminal"
-  fm_backend_hc_target_exists t8 || fail "target_exists: live fm- terminal with no label"
+  if fm_backend_hc_target_exists t8; then fail "target_exists: a label is required"; fi
   if fm_backend_hc_target_exists t8 fm-other; then fail "target_exists: other name"; fi
   get_json_unnamed t8 live "$ZSH_FG"
   if fm_backend_hc_target_exists t8; then fail "target_exists: unnamed terminal"; fi

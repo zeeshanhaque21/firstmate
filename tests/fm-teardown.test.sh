@@ -1820,6 +1820,45 @@ test_fractional_legacy_retry_wait_refuses_without_arithmetic_error() {
   pass "fractional legacy retry wait remains supported without arithmetic"
 }
 
+test_scout_scratch_worktree_is_discarded_without_force() {
+  local case_dir rc
+  case_dir=$(make_case scout-scratch)
+  write_meta "$case_dir" no-mistakes scout
+  printf '%s\n' 'decisions_reviewed=1' >> "$case_dir/state/task-x1.meta"
+  mkdir -p "$case_dir/data/task-x1"
+  printf '%s\n' '# Report' > "$case_dir/data/task-x1/report.md"
+  printf '%s\n' scratch > "$case_dir/wt/scratch.txt"
+  printf '%s\n' edit >> "$case_dir/wt/README.md"
+
+  set +e
+  run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+
+  expect_code 0 "$rc" "scout-scratch: scratch files must not block a non-force scout teardown: $(cat "$case_dir/stderr")"
+  [ ! -d "$case_dir/wt" ] || fail "scout-scratch: scout worktree should be removed"
+  pass "a scout's untracked and modified scratch files are discarded without --force"
+}
+
+test_forced_discard_never_touches_primary_checkout() {
+  local case_dir rc
+  case_dir=$(make_case primary-guard)
+  write_meta "$case_dir" local-only ship
+  fm_write_meta "$case_dir/state/task-x1.meta" \
+    "window=firstmate:fm-task-x1" "endpoint_task_id=task-x1" \
+    "worktree=$case_dir/project" "project=$case_dir/project" \
+    "kind=ship" "mode=local-only" "spawn_gen=teardown-test-task-x1"
+  printf '%s\n' precious > "$case_dir/project/precious.txt"
+
+  set +e
+  run_teardown "$case_dir" --force > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+
+  [ -f "$case_dir/project/precious.txt" ] || fail "primary-guard: --force discarded the project's primary checkout (rc=$rc)"
+  pass "--force never resets or cleans the project's primary checkout named by a stale record"
+}
+
 test_local_only_force_overrides_unpushed() {
   local case_dir rc
   case_dir=$(make_case force-override)
@@ -3870,6 +3909,8 @@ test_local_only_truly_unpushed_refuses
 test_local_only_merged_to_local_main_allows
 test_no_mistakes_origin_remote_allows
 test_no_mistakes_truly_unpushed_refuses
+test_scout_scratch_worktree_is_discarded_without_force
+test_forced_discard_never_touches_primary_checkout
 test_local_only_force_overrides_unpushed
 test_secondmate_pr_registration_publishes_ready_line
 test_secondmate_home_teardown_delivers_final_line_or_refuses

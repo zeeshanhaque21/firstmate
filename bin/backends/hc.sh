@@ -133,12 +133,13 @@ fm_backend_hc_get() {  # <target>
 # fm_backend_hc_verify: confirm <target> is the terminal named <label>, and
 # print its `hc get` JSON. Returns 0 verified, 3 definitively absent (hc
 # not_found), 4 present under a DIFFERENT name (unnamed included), 1 invalid
-# input or unreadable. With no <label>, only the `fm-` name prefix is required.
-fm_backend_hc_verify() {  # <target> [label]
+# input or unreadable. A <label> is mandatory: an address renumbered after an hc
+# server restart must never be accepted as some other task's terminal.
+fm_backend_hc_verify() {  # <target> <label>
   local target=$1 label=${2:-} info rc=0 name
   fm_backend_hc_target_valid "$target" || return 1
-  if [ -n "$label" ] && ! fm_backend_hc_label_valid "$label"; then
-    echo "error: refusing hc terminal $target: '$label' is not an fm-<id> terminal name" >&2
+  if ! fm_backend_hc_label_valid "$label"; then
+    echo "error: refusing hc terminal $target: '${label:-}' is not an fm-<id> terminal name" >&2
     return 1
   fi
   info=$(fm_backend_hc_get "$target") || rc=$?
@@ -146,12 +147,8 @@ fm_backend_hc_verify() {  # <target> [label]
   name=$(printf '%s' "$info" | jq -r '.name // empty' 2>/dev/null) || return 1
   # hc resolves names as well as addresses; the answer must BE the asked address.
   [ "$(printf '%s' "$info" | jq -r '.address // empty' 2>/dev/null)" = "$target" ] || return 1
-  if [ -n "$label" ]; then
-    [ "$name" = "$label" ] && { printf '%s' "$info"; return 0; }
-  else
-    case "$name" in fm-?*) printf '%s' "$info"; return 0 ;; esac
-  fi
-  printf 'error: refusing hc terminal %s: it is named %q, not %s\n' "$target" "$name" "${label:-an fm- task terminal}" >&2
+  [ "$name" = "$label" ] && { printf '%s' "$info"; return 0; }
+  printf 'error: refusing hc terminal %s: it is named %q, not %s\n' "$target" "$name" "$label" >&2
   return 4
 }
 
@@ -167,10 +164,6 @@ fm_backend_hc_ref() {  # <target> <label> <act|read>
     return 1
   fi
   fm_backend_hc_verify "$target" "$label" >/dev/null || return 1
-  if [ -z "$label" ]; then
-    printf '%s' "$target"
-    return 0
-  fi
   byname=$(fm_backend_hc_get_ref "$label") || rc=$?
   [ "$rc" -eq 0 ] || { echo "error: refusing hc terminal $target: could not re-resolve $label by name" >&2; return 1; }
   addr=$(printf '%s' "$byname" | jq -r '.address // empty' 2>/dev/null)

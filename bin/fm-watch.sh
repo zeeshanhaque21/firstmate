@@ -446,7 +446,7 @@ inbox_steer_check() {  # <window> <task>
       ;;
   esac
   backend=$(window_backend "$w")
-  agent_state=$(fm_backend_agent_state "$backend" "$w" 2>/dev/null || true)
+  agent_state=$(fm_backend_agent_state "$backend" "$w" "fm-$task" 2>/dev/null || true)
   case "$agent_state" in
     dead|missing)
       inbox_steer_escalate_unavailable "$w" "$task" "$rec"
@@ -1142,7 +1142,7 @@ pause_state_class() {  # <window> <task>
   kind=$(window_kind "$win")
   if [ -e "$STATE/.paused-$key" ] && [ "$(age_of "$recheck_file")" -lt "$STALE_ESCALATE_SECS" ]; then
     if [ "$kind" != secondmate ]; then
-      agent_alive=$(fm_backend_agent_alive "$(window_backend "$win")" "$win" 2>/dev/null) || agent_alive=unknown
+      agent_alive=$(fm_backend_agent_alive "$(window_backend "$win")" "$win" "fm-$task" 2>/dev/null) || agent_alive=unknown
       if [ "$agent_alive" != dead ]; then
         rm -f "$recheck_file"
         printf 'none'
@@ -1159,7 +1159,7 @@ pause_state_class() {  # <window> <task>
     return
   fi
   if [ "$kind" != secondmate ]; then
-    agent_alive=$(fm_backend_agent_alive "$(window_backend "$win")" "$win" 2>/dev/null) || agent_alive=unknown
+    agent_alive=$(fm_backend_agent_alive "$(window_backend "$win")" "$win" "fm-$task" 2>/dev/null) || agent_alive=unknown
     if [ "$agent_alive" != dead ]; then
       rm -f "$recheck_file"
       printf 'none'

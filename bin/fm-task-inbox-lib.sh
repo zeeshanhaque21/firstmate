@@ -284,7 +284,7 @@ fm_task_inbox_doorbell_line() {  # <record-path>
 # positively identify (that classifier is advisory here by design).
 fm_task_inbox_ring() {  # <backend> <target> <record-path> [expected-label]
   local backend=$1 target=$2 rec=$3 label=${4:-} line cstate verdict
-  case "$(fm_backend_agent_state "$backend" "$target" 2>/dev/null || true)" in
+  case "$(fm_backend_agent_state "$backend" "$target" "$label" 2>/dev/null || true)" in
     dead|missing) return 3 ;;
   esac
   if ! line=$(fm_task_inbox_doorbell_line "$rec"); then
