@@ -544,7 +544,8 @@ echo "fake agy must never execute" >&2
 exit 9
 SH
   chmod +x "$fakebin/agy"
-  fm_fake_exit0 "$fakebin" treehouse gh-axi gh
+  fm_fake_exit0 "$fakebin" gh-axi gh
+  fm_fake_wt_fixed "$fakebin"
   printf '%s\n' "$fakebin"
 }
 
@@ -587,7 +588,12 @@ EOF
 # which runners do not keep in the system bin dirs. Carry the directory the
 # invoking environment resolves node from, the fm-kimi-harness shape.
 NODE_BIN=$(command -v node) || fail "test needs node"
-NODE_BIN_DIR=$(dirname "$NODE_BIN")
+# Only node itself is exposed: its own directory may also hold a real agy (it does
+# on a machine that installs both side by side), which would defeat the cases that
+# prove a missing agy is refused.
+NODE_BIN_DIR="$TMP_ROOT/node-only-bin"
+mkdir -p "$NODE_BIN_DIR"
+ln -s "$NODE_BIN" "$NODE_BIN_DIR/node"
 BASE_PATH=${FM_TEST_BASE_PATH:-$NODE_BIN_DIR:/usr/bin:/bin:/usr/sbin:/sbin}
 
 run_agy_spawn() {
@@ -596,7 +602,7 @@ run_agy_spawn() {
   HOME="$home" FM_ROOT_OVERRIDE='' FM_HOME="$home" \
     FM_STATE_OVERRIDE="$home/state" FM_DATA_OVERRIDE="$home/data" \
     FM_PROJECTS_OVERRIDE="$home/projects" FM_CONFIG_OVERRIDE="$home/config" \
-    FM_SPAWN_NO_GUARD=1 FM_FAKE_PANE_PATH="$wt" TMUX="fake,1,0" \
+    FM_SPAWN_NO_GUARD=1 FM_FAKE_PANE_PATH="$wt" FM_FAKE_WT_PATH="$wt" TMUX="fake,1,0" \
     FM_FAKE_LAUNCH_LOG="$case_dir/launch.log" \
     FM_FAKE_TMUX_CALL_LOG="$case_dir/tmux-calls.log" \
     FM_FAKE_AGY_STATE="$case_dir/agy.state" \

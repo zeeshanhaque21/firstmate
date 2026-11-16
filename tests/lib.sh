@@ -168,6 +168,58 @@ fm_test_reap_procevent_homes() {
 FM_TEST_STUB_MAX_BLOCK_SECONDS=${FM_TEST_STUB_MAX_BLOCK_SECONDS:-120}
 export FM_TEST_STUB_MAX_BLOCK_SECONDS
 
+# --- real-repository tripwire -------------------------------------------------
+#
+# Worktree-creating suites (spawn, teardown, secondmate seeding) must only ever
+# create worktrees and branches in scratch repositories. A suite that forgets to
+# point the code under test at one writes into the repository hosting the tests:
+# `wt` run against it creates a worktree and a branch in the developer's real
+# checkout, which a later run then trips over. fm_test_arm_repo_tripwire takes a
+# read-only snapshot of that repository's worktrees and local refs when a suite
+# starts, and fm_test_cleanup (every suite's EXIT path) compares it and fails the
+# suite loudly, naming the difference, when anything changed.
+#
+# The repository is the common git dir of ROOT, so a linked worktree of the
+# primary checkout is watched through the shared repository. An argument
+# overrides it (the tripwire's own regression uses a scratch repository).
+# Arming is idempotent and must run in the suite's own shell, never a subshell.
+FM_TEST_TRIPWIRE_GITDIR=
+# Prints the worktree paths and branches, and every local branch and tag name.
+# Commit ids are left out on purpose so ordinary commits never read as a leak.
+fm_test_repo_snapshot() {  # <git-dir>
+  {
+    git --git-dir="$1" worktree list --porcelain 2>&1 | grep -E '^(worktree|branch|detached|bare)( |$)' || true
+    printf -- '--refs--\n'
+    git --git-dir="$1" for-each-ref --format='%(refname)' refs/heads refs/tags 2>&1 || true
+  } | LC_ALL=C sort
+}
+
+fm_test_arm_repo_tripwire() {  # [git-dir]
+  [ -z "$FM_TEST_TRIPWIRE_GITDIR" ] || return 0
+  local gitdir=${1:-}
+  if [ -z "$gitdir" ]; then
+    gitdir=$(git -C "$ROOT" rev-parse --path-format=absolute --git-common-dir 2>/dev/null) || return 0
+  fi
+  [ -d "$gitdir" ] || return 0
+  FM_TEST_TRIPWIRE_GITDIR=$gitdir
+  FM_TEST_TRIPWIRE_BEFORE=$(fm_test_repo_snapshot "$gitdir")
+}
+
+# Returns 0 when nothing changed (or the tripwire was never armed); prints the
+# difference to stderr and returns 1 otherwise.
+fm_test_check_repo_tripwire() {
+  [ -n "$FM_TEST_TRIPWIRE_GITDIR" ] || return 0
+  local after
+  after=$(fm_test_repo_snapshot "$FM_TEST_TRIPWIRE_GITDIR")
+  [ "$after" != "$FM_TEST_TRIPWIRE_BEFORE" ] || return 0
+  {
+    printf 'not ok - TRIPWIRE: this suite changed the worktrees or branches of the repository hosting the tests (%s)\n' "$FM_TEST_TRIPWIRE_GITDIR"
+    diff <(printf '%s\n' "$FM_TEST_TRIPWIRE_BEFORE") <(printf '%s\n' "$after") | sed 's/^/  /'
+    printf '  Point the code under test at a scratch repository (a mktemp clone, FM_ROOT_OVERRIDE for home seeding) and remove the leak above by hand.\n'
+  } >&2
+  return 1
+}
+
 fm_test_cleanup() {
   local d
   fm_test_reap_procevent_homes
@@ -180,6 +232,10 @@ fm_test_cleanup() {
     done < "$FM_TEST_CLEANUP_REGISTRY"
     rm -f "$FM_TEST_CLEANUP_REGISTRY"
   fi
+  # Checked last so the fixture cleanup above still ran; an explicit exit code
+  # outranks the suite's own (and an interrupt's) because a leak must never read
+  # as a pass or as a plain interruption.
+  fm_test_check_repo_tripwire || exit 97
 }
 
 fm_test_tmproot() {
@@ -365,6 +421,41 @@ exit 0
 SH
     chmod +x "$fakebin/$tool"
   done
+}
+
+# fm_fake_wt_fixed <fakebin>
+# A `wt` for suites that exercise something OTHER than worktree creation (harness
+# launch shape, brief delivery, trust handling) and already own a real git
+# worktree for the task. `wt switch --create <branch>` reports that worktree as
+# the one it just created, with the JSON shape the real wt prints
+# ({"action":"created","branch":...,"path":...}); `wt remove` and every other
+# verb succeed without touching anything. The worktree comes from
+# FM_FAKE_WT_PATH at call time, every call is appended to FM_FAKE_WT_LOG when
+# set, and FM_FAKE_WT_FAIL=1 makes `switch` exit 1 the way a refused create does.
+# Suites that assert creation or removal behavior use the real wt instead
+# (tests/fm-spawn-wt.test.sh, tests/fm-teardown.test.sh).
+fm_fake_wt_fixed() {
+  local fakebin=$1
+  cat > "$fakebin/wt" <<'SH'
+#!/usr/bin/env bash
+set -u
+[ -z "${FM_FAKE_WT_LOG:-}" ] || printf 'wt %s\n' "$*" >> "$FM_FAKE_WT_LOG"
+[ "${1:-}" != -C ] || shift 2
+case "${1:-}" in
+  switch)
+    [ "${FM_FAKE_WT_FAIL:-0}" != 1 ] || { echo "error: fake wt refused the switch" >&2; exit 1; }
+    branch=
+    prev=
+    for a in "$@"; do
+      [ "$prev" != --create ] || branch=$a
+      prev=$a
+    done
+    printf '{"action":"created","branch":"%s","path":"%s"}\n' "$branch" "${FM_FAKE_WT_PATH:?FM_FAKE_WT_PATH is required}"
+    ;;
+esac
+exit 0
+SH
+  chmod +x "$fakebin/wt"
 }
 
 # fm_fake_crash_injector <fakebin>

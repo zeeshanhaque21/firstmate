@@ -112,7 +112,8 @@ set -u
 exec "$FM_FAKE_MUSE_VERSIONED" -c 'result=$($FM_FAKE_HARNESS_PROBE); printf "%s" "$result" > "$FM_FAKE_HARNESS_RESULT"'
 SH
   chmod +x "$fakebin/muse"
-  fm_fake_exit0 "$fakebin" treehouse gh-axi gh
+  fm_fake_exit0 "$fakebin" gh-axi gh
+  fm_fake_wt_fixed "$fakebin"
   printf '%s\n' "$fakebin"
 }
 
@@ -145,7 +146,7 @@ run_muse_spawn() {  # <home> <proj> <wt> <fakebin> <id> [extra args...]
   FM_ROOT_OVERRIDE='' FM_HOME="$home" \
     FM_STATE_OVERRIDE="$home/state" FM_DATA_OVERRIDE="$home/data" \
     FM_PROJECTS_OVERRIDE="$home/projects" FM_CONFIG_OVERRIDE="$home/config" \
-    FM_SPAWN_NO_GUARD=1 FM_FAKE_PANE_PATH="$wt" TMUX="fake,1,0" \
+    FM_SPAWN_NO_GUARD=1 FM_FAKE_PANE_PATH="$wt" FM_FAKE_WT_PATH="$wt" TMUX="fake,1,0" \
     FM_FAKE_LAUNCH_LOG="$home/launch.log" \
     FM_FAKE_MUSE_EXECUTABLE="$fakebin/muse" \
     FM_FAKE_MUSE_VERSIONED="$fakebin/muse-bin-test-version" \

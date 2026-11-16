@@ -3,18 +3,52 @@
 # suites (fm-secondmate-lifecycle-e2e and fm-secondmate-safety).
 #
 # These mocks encode secondmate-lifecycle behavior (fake tmux that logs window
-# ops, fake treehouse that leases/returns homes, fake no-mistakes that records
-# init/doctor), so they live here rather than in the generic tests/lib.sh. The
-# generic git/identity/meta primitives come from lib.sh, which this file pulls in.
+# ops, fake no-mistakes that records init/doctor), so they live here rather than
+# in the generic tests/lib.sh. The generic git/identity/meta primitives come from
+# lib.sh, which this file pulls in.
+#
+# Secondmate homes are Worktrunk worktrees of a firstmate repository, created and
+# removed by the REAL wt and git. A suite that seeds one MUST point the seed at a
+# scratch firstmate repository (fm_test_scratch_firstmate_root, passed as
+# FM_ROOT_OVERRIDE): left unset, the seed treats the repository hosting the tests
+# as the firstmate repository and creates its fm-home/<id> branch and worktree
+# there. Sourcing this file arms the real-repository tripwire from lib.sh so a
+# suite that forgets fails loudly instead of leaking.
 
 # shellcheck source=tests/lib.sh
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
+fm_test_arm_repo_tripwire
+
+# fm_test_scratch_firstmate_root <dest>
+# Builds a throwaway firstmate git repository at <dest> (branch main, one commit,
+# no remote) holding a copy of this checkout's files, working-tree edits included,
+# so the scripts a seed runs from FM_ROOT are the ones under test. wt creates
+# secondmate homes beside it in <dest>-worktrees/. Echoes the physical path.
+fm_test_scratch_firstmate_root() {
+  local dest=$1 f
+  mkdir -p "$dest"
+  while IFS= read -r -d '' f; do
+    [ -f "$ROOT/$f" ] || continue
+    mkdir -p "$dest/$(dirname "$f")"
+    cp -p "$ROOT/$f" "$dest/$f"
+  done < <(git -C "$ROOT" ls-files -z --cached --others --exclude-standard -- . ':!tests')
+  git -C "$dest" init -q -b main
+  git -C "$dest" add -A
+  git -C "$dest" -c user.name='Firstmate Tests' -c user.email='tests@example.invalid' commit -qm 'scratch firstmate root'
+  (cd "$dest" && pwd -P)
+}
+
+# fm_test_scratch_home_path <scratch-root> <id>
+# The path wt gave the fm-home/<id> worktree of a scratch root, read from git.
+fm_test_scratch_home_path() {
+  git -C "$1" worktree list --porcelain | awk -v b="refs/heads/fm-home/$2" '
+    /^worktree /{p=substr($0,10)} $0=="branch " b {print p}'
+}
+
 # A fake tmux (window ops are logged to FM_FAKE_TMUX_LOG, list-windows returns
-# FM_FAKE_TMUX_WINDOW, capture-pane echoes FM_FAKE_TMUX_CAPTURE) plus a fake
-# treehouse (durable lease of FM_FAKE_TREEHOUSE_HOME, recording the lease holder
-# to FM_FAKE_TREEHOUSE_LEASE_FILE; `return` removes the target and lease unless
-# FM_FAKE_TREEHOUSE_RETURN_FAIL is set). Echoes the fakebin dir.
+# FM_FAKE_TMUX_WINDOW, capture-pane echoes FM_FAKE_TMUX_CAPTURE). Echoes the
+# fakebin dir.
 make_fake_tmux() {
   local dir=$1 fakebin capture
   fakebin=$(fm_fakebin "$dir")
@@ -68,52 +102,7 @@ EOF
 esac
 exit 1
 SH
-  cat > "$fakebin/treehouse" <<'SH'
-#!/usr/bin/env bash
-set -u
-printf 'treehouse %s\n' "$*" >> "${FM_FAKE_TMUX_LOG:-/dev/null}"
-case "${1:-}" in
-  get)
-    # Durable lease: print only the worktree path to stdout (banners to stderr),
-    # and record the lease holder so tests can assert it is set and later cleared.
-    shift
-    holder=
-    while [ $# -gt 0 ]; do
-      case "$1" in
-        --lease) ;;
-        --lease-holder) shift; holder=${1:-} ;;
-        --lease-holder=*) holder=${1#--lease-holder=} ;;
-      esac
-      shift
-    done
-    if [ -n "${FM_FAKE_TREEHOUSE_HOME:-}" ]; then
-      mkdir -p "$FM_FAKE_TREEHOUSE_HOME"
-      [ -n "${FM_FAKE_TREEHOUSE_LEASE_FILE:-}" ] && printf '%s\n' "$holder" > "$FM_FAKE_TREEHOUSE_LEASE_FILE"
-      printf 'leased worktree for %s\n' "${holder:-unknown}" >&2
-      printf '%s\n' "$FM_FAKE_TREEHOUSE_HOME"
-    fi
-    exit 0
-    ;;
-  return)
-    shift
-    target=
-    while [ $# -gt 0 ]; do
-      case "$1" in
-        --force) ;;
-        *) target=$1 ;;
-      esac
-      shift
-    done
-    [ -z "${FM_FAKE_TREEHOUSE_RETURN_FAIL:-}" ] || exit 17
-    [ -n "${FM_FAKE_TREEHOUSE_LEASE_FILE:-}" ] && rm -f "$FM_FAKE_TREEHOUSE_LEASE_FILE"
-    [ -n "$target" ] && rm -rf -- "$target"
-    exit 0
-    ;;
-esac
-exit 0
-SH
   chmod +x "$fakebin/tmux"
-  chmod +x "$fakebin/treehouse"
   : > "$dir/tmux.log"
   printf '%s\n' "$fakebin"
 }

@@ -238,11 +238,59 @@ test_spawn_tmux_and_fakebin() {
   [ "$out" = firstmate ] || fail "spawn tmux session name should be firstmate, got '$out'"
   FM_FAKE_LAUNCH_LOG="$log" "$fakebin/tmux" send-keys -t @w -l 'codex --yolo'
   assert_grep 'codex --yolo' "$log" "send-keys -l payload was not logged"
-  [ -x "$fakebin/treehouse" ] || fail "spawn fakebin should include treehouse"
   [ -x "$fakebin/gh-axi" ] || fail "extra exit-0 tools should land in the spawn fakebin"
-  "$fakebin/treehouse" get
-  expect_code 0 $? "fake treehouse should exit 0"
+  [ -x "$fakebin/wt" ] || fail "the spawn fakebin should carry the fixed wt stub"
+  out=$(FM_FAKE_WT_PATH=/the/pre-made/wt "$fakebin/wt" -C /proj switch --create fm/x1 --base main --no-cd --format json)
+  [ "$(printf '%s' "$out" | jq -r '.action + "|" + .branch + "|" + .path')" = 'created|fm/x1|/the/pre-made/wt' ] \
+    || fail "the fixed wt stub must print the real wt's created-JSON shape, got '$out'"
+  FM_FAKE_WT_PATH=/the/pre-made/wt "$fakebin/wt" -C /proj remove /the/pre-made/wt --foreground
+  expect_code 0 $? "the fixed wt stub should accept remove"
+  fm_test_spawn_real_wt "$fakebin"
+  [ ! -e "$fakebin/wt" ] || fail "fm_test_spawn_real_wt should drop the stub so the real wt is used"
   pass "spawn fakebin answers pane path, logs -l payloads, and installs extra tools"
+}
+
+test_spawn_tmux_follows_the_typed_cd() {
+  local fakebin out panefile="$TMP_ROOT/follow/pane"
+  fakebin=$(make_spawn_fakebin "$TMP_ROOT/follow")
+  out=$(FM_FAKE_PANE_FILE="$panefile" FM_FAKE_PANE_PATH=/start "$fakebin/tmux" display-message -p '#{pane_current_path}')
+  [ "$out" = /start ] || fail "the pane should start at FM_FAKE_PANE_PATH, got '$out'"
+  FM_FAKE_PANE_FILE="$panefile" "$fakebin/tmux" send-keys -t @w -l 'cd /some/wt\ dir'
+  out=$(FM_FAKE_PANE_FILE="$panefile" FM_FAKE_PANE_PATH=/start "$fakebin/tmux" display-message -p '#{pane_current_path}')
+  [ "$out" = '/some/wt dir' ] || fail "the pane should follow the typed cd, got '$out'"
+  FM_FAKE_PANE_FILE="$panefile" "$fakebin/tmux" send-keys -t @w -l "cd -- '/relaunch/wt'"
+  out=$(FM_FAKE_PANE_FILE="$panefile" FM_FAKE_PANE_PATH=/start "$fakebin/tmux" display-message -p '#{pane_current_path}')
+  [ "$out" = /relaunch/wt ] || fail "the pane should follow a cd -- form, got '$out'"
+  rm -f "$panefile"
+  FM_FAKE_NO_CD=1 FM_FAKE_PANE_FILE="$panefile" "$fakebin/tmux" send-keys -t @w -l 'cd /elsewhere'
+  out=$(FM_FAKE_PANE_FILE="$panefile" FM_FAKE_PANE_PATH=/start "$fakebin/tmux" display-message -p '#{pane_current_path}')
+  [ "$out" = /start ] || fail "FM_FAKE_NO_CD=1 should pin the pane at its start path, got '$out'"
+  pass "spawn tmux follows the typed cd like a shell and FM_FAKE_NO_CD pins it"
+}
+
+# The real-repository tripwire (tests/lib.sh) must stay silent when nothing
+# changed and fail the suite with its own exit code when a worktree or branch
+# appears in the watched repository, because that is how a leak reads.
+test_repo_tripwire() {
+  local repo="$TMP_ROOT/tripwire/repo" out rc
+  fm_git_init_commit "$repo"
+  out=$(bash -c '. "$1"; fm_test_arm_repo_tripwire "$2"; exit 0' _ "$ROOT/tests/lib.sh" "$repo/.git" 2>&1); rc=$?
+  expect_code 0 "$rc" "an untouched repository must not trip the tripwire: $out"
+  out=$(bash -c '. "$1"; fm_test_arm_repo_tripwire "$2"; git -C "$3" -c user.name=t -c user.email=t@t commit -q --allow-empty -m more; exit 0' _ "$ROOT/tests/lib.sh" "$repo/.git" "$repo" 2>&1); rc=$?
+  expect_code 0 "$rc" "an ordinary commit must not trip the tripwire: $out"
+  out=$(bash -c '. "$1"; fm_test_arm_repo_tripwire "$2"; git -C "$3" branch fm-home/leaked; exit 0' _ "$ROOT/tests/lib.sh" "$repo/.git" "$repo" 2>&1); rc=$?
+  expect_code 97 "$rc" "a new branch must trip the tripwire"
+  assert_contains "$out" "TRIPWIRE" "the tripwire did not say what it is"
+  assert_contains "$out" "fm-home/leaked" "the tripwire did not name the leaked branch"
+  git -C "$repo" branch -q -D fm-home/leaked
+  out=$(bash -c '. "$1"; fm_test_arm_repo_tripwire "$2"; git -C "$3" worktree add -q -b fm/leaked "$3-wt"; exit 0' _ "$ROOT/tests/lib.sh" "$repo/.git" "$repo" 2>&1); rc=$?
+  expect_code 97 "$rc" "a new worktree must trip the tripwire"
+  assert_contains "$out" "$repo-wt" "the tripwire did not name the leaked worktree"
+  git -C "$repo" worktree remove --force "$repo-wt"
+  git -C "$repo" branch -q -D fm/leaked
+  out=$(bash -c '. "$1"; fm_test_arm_repo_tripwire "$2"; git -C "$3" branch fm/leaked2; exit 1' _ "$ROOT/tests/lib.sh" "$repo/.git" "$repo" 2>&1); rc=$?
+  expect_code 97 "$rc" "a leak must outrank a failing suite's own exit code"
+  pass "the real-repository tripwire stays quiet on commits and fails loudly on a leaked branch or worktree"
 }
 
 test_send_stubs_and_ssh() {
@@ -285,5 +333,7 @@ test_no_mistakes_version_constant
 test_no_mistakes_init_doctor_markers
 test_fake_gh_and_gh_axi
 test_spawn_tmux_and_fakebin
+test_spawn_tmux_follows_the_typed_cd
+test_repo_tripwire
 test_send_stubs_and_ssh
 test_spawn_home_layout

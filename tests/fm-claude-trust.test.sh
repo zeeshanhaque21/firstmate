@@ -119,7 +119,7 @@ node_free_path() {  # <case-dir> -> a bin dir holding the script's own tools but
 # operational directories, and a charter for the launch to carry. "clone" (the
 # default) is the standalone-clone home an explicit ~/fm-homes/<id> path
 # produces, a primary checkout of the firstmate repo; "worktree" is the linked
-# worktree a treehouse lease produces. Both shapes are real homes, so both must
+# worktree `wt switch --create fm-home/<id>` produces. Both shapes are real homes, so both must
 # be trusted.
 seed_secondmate_home() {
   local home=$1 id=$2 shape=${3:-clone} src
@@ -683,10 +683,10 @@ test_secondmate_standalone_clone_home_is_trusted() {
   pass "fm-spawn.sh: a claude secondmate spawn pre-trusts a standalone-clone home"
 }
 
-# The other seeded shape, a treehouse-leased linked worktree. It must be trusted
+# The other seeded shape, a Worktrunk-created linked worktree (branch fm-home/<id>). It must be trusted
 # through the same seed evidence rather than incidentally, so the registration
 # does not depend on which shape the home happens to have.
-test_secondmate_leased_worktree_home_is_trusted() {
+test_secondmate_wt_worktree_home_is_trusted() {
   local case_dir home out
   case_dir="$TMP_ROOT/sm-leased-spawn"
   home="$case_dir/leased/home"
@@ -840,7 +840,7 @@ test_scope_refusal_stays_fail_closed_without_node
 test_claude_spawn_pretrusts_its_worktree_and_reaches_the_brief
 test_refused_spawn_leaves_no_task_state
 test_secondmate_standalone_clone_home_is_trusted
-test_secondmate_leased_worktree_home_is_trusted
+test_secondmate_wt_worktree_home_is_trusted
 test_secondmate_home_trust_refuses_everything_unseeded
 test_worktree_mode_still_refuses_a_secondmate_home
 test_secondmate_spawn_fails_closed_when_home_trust_cannot_be_recorded

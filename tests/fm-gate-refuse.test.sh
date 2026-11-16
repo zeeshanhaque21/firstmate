@@ -30,6 +30,8 @@ set -u
 # shellcheck source=tests/fixtures.sh
 . "$(dirname "${BASH_SOURCE[0]}")/fixtures.sh"
 
+fm_test_require_wt
+
 GATE_LIB="$ROOT/bin/fm-gate-refuse-lib.sh"
 SPAWN="$ROOT/bin/fm-spawn.sh"
 SEND="$ROOT/bin/fm-send.sh"
@@ -143,7 +145,7 @@ run_spawn() {
       FM_ROOT_OVERRIDE='' FM_HOME="$home" \
       FM_STATE_OVERRIDE="$home/state" FM_DATA_OVERRIDE="$home/data" \
       FM_PROJECTS_OVERRIDE="$home/projects" FM_CONFIG_OVERRIDE="$home/config" \
-      FM_SPAWN_NO_GUARD=1 FM_FAKE_PANE_PATH="$pane" TMUX=fake,1,0 \
+      FM_SPAWN_NO_GUARD=1 FM_FAKE_PANE_PATH="$pane" FM_FAKE_WT_PATH="$pane" TMUX=fake,1,0 \
       PATH="$fakebin:$PATH" "$@" \
       "$SPAWN" "$id" "$proj" codex --mode no-mistakes --yolo off ) 2>&1
 }
@@ -268,13 +270,13 @@ test_send_refuses_and_admits() {
 # task (HEAD reachable from origin), so a normal teardown genuinely succeeds and a
 # refused one leaves the task untouched (mirrors tests/fm-teardown make_case).
 make_teardown_case() {
-  local name=$1 case_dir fakebin t
+  local name=$1 case_dir fakebin
   case_dir="$TMP/$name"; fakebin="$case_dir/fakebin"
   mkdir -p "$case_dir/state" "$case_dir/config" "$case_dir/data" "$fakebin"
-  for t in treehouse tmux; do
-    printf '#!/usr/bin/env bash\nexit 0\n' > "$fakebin/$t"
-    chmod +x "$fakebin/$t"
-  done
+  # tmux is faked; wt and git are real, so a teardown that is allowed really
+  # removes the worktree (run_teardown points wt at a scratch config).
+  printf '#!/usr/bin/env bash\nexit 0\n' > "$fakebin/tmux"
+  chmod +x "$fakebin/tmux"
   cat > "$fakebin/gh-axi" <<'SH'
 #!/usr/bin/env bash
 case "${1:-} ${2:-}" in
@@ -317,7 +319,7 @@ run_teardown() {
   ( cd "$cwd" && env -u NO_MISTAKES_GATE -u FM_GATE_REFUSE_BYPASS \
       "FM_ROOT_OVERRIDE=$ROOT" "FM_STATE_OVERRIDE=$case_dir/state" \
       "FM_DATA_OVERRIDE=$case_dir/data" "FM_CONFIG_OVERRIDE=$case_dir/config" \
-      "PATH=$case_dir/fakebin:$PATH" "$@" \
+      "XDG_CONFIG_HOME=$case_dir/xdg" "PATH=$case_dir/fakebin:$PATH" "$@" \
       "$TEARDOWN" task-x1 ) 2>&1
 }
 

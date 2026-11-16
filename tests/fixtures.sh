@@ -23,6 +23,10 @@ if [ -n "${FM_TEST_FIXTURES_SOURCED:-}" ]; then
 fi
 FM_TEST_FIXTURES_SOURCED=1
 
+# Every suite that builds a spawn world creates real worktrees and branches, so
+# it carries the real-repository tripwire (tests/lib.sh owns the contract).
+fm_test_arm_repo_tripwire
+
 # Production floor lives in bin/fm-bootstrap.sh (NO_MISTAKES_MIN). Keep this
 # equal to that floor so a bump is one constant here plus that production pin.
 export FM_TEST_NO_MISTAKES_VERSION=1.46.0
@@ -97,16 +101,25 @@ fm_test_fake_gh_axi() {
 # set, each send-keys -l payload is appended one per line. Optional
 # FM_FAKE_DUPLICATE_WINDOW is printed from list-windows.
 #
-# The pane path defaults to empty when FM_FAKE_PANE_PATH is unset. Window
-# cleanup and option operations are no-ops. Launch logging is env-gated, so
-# suites that do not set FM_FAKE_LAUNCH_LOG keep a silent send-keys.
+# The pane path starts at FM_FAKE_PANE_PATH (empty when unset) and then follows
+# the last `cd <path>` typed into the pane, exactly as a shell would: spawn
+# creates the worktree itself and types `cd <worktree>`, so the pane only reaches
+# the worktree once that line arrives. FM_FAKE_PANE_FILE names the file holding
+# the followed path (fm_test_run_spawn pins one per home); FM_FAKE_NO_CD=1 pins
+# the pane at its start path so the worktree wait times out. Window cleanup and
+# option operations are no-ops. Launch logging is env-gated, so suites that do
+# not set FM_FAKE_LAUNCH_LOG keep a silent send-keys.
 fm_test_fake_tmux_spawn() {
   local fakebin=$1
   cat > "$fakebin/tmux" <<'SH'
 #!/usr/bin/env bash
 set -u
+cdfile=${FM_FAKE_PANE_FILE:-}
 case "$*" in
-  *"#{pane_current_path}"*) printf '%s\n' "${FM_FAKE_PANE_PATH:-}"; exit 0 ;;
+  *"#{pane_current_path}"*)
+    if [ -n "$cdfile" ] && [ -s "$cdfile" ]; then cat "$cdfile"; else printf '%s\n' "${FM_FAKE_PANE_PATH:-}"; fi
+    exit 0
+    ;;
 esac
 case "${1:-}" in
   display-message) printf 'firstmate\n'; exit 0 ;;
@@ -118,15 +131,18 @@ case "${1:-}" in
     ;;
   has-session|new-session|new-window|kill-window|set-window-option) exit 0 ;;
   send-keys)
-    if [ -n "${FM_FAKE_LAUNCH_LOG:-}" ]; then
-      prev=
-      for a in "$@"; do
-        if [ "$prev" = "-l" ]; then
-          printf '%s\n' "$a" >> "$FM_FAKE_LAUNCH_LOG"
-        fi
-        prev=$a
-      done
-    fi
+    prev=
+    for a in "$@"; do
+      if [ "$prev" = "-l" ] && [ -n "${FM_FAKE_LAUNCH_LOG:-}" ]; then
+        printf '%s\n' "$a" >> "$FM_FAKE_LAUNCH_LOG"
+      fi
+      if [ -n "$cdfile" ] && [ "${FM_FAKE_NO_CD:-0}" != 1 ]; then
+        case "$a" in
+          "cd "*) eval "set -- ${a#cd }"; [ "${1:-}" != -- ] || shift; printf '%s\n' "${1:-}" > "$cdfile" ;;
+        esac
+      fi
+      prev=$a
+    done
     exit 0
     ;;
 esac
@@ -251,15 +267,44 @@ EOF
 }
 
 # fm_test_make_spawn_fakebin <dir> [extra-exit0-tool...]
-# Creates <dir>/fakebin with the spawn tmux stub, a no-op treehouse, and any
-# extra exit-0 tools. Echoes the fakebin path.
+# Creates <dir>/fakebin with the spawn tmux stub, the fixed wt stub, and any extra
+# exit-0 tools. Echoes the fakebin path.
+#
+# The default wt is fm_fake_wt_fixed: the suite owns a real git worktree (often
+# from fm_git_worktree), passes it to fm_test_run_spawn as the pane path, and wt
+# reports it as the worktree it "created". That suits every suite about harness
+# launch shape, brief delivery or trust, none of which is about creating the
+# worktree. A suite that asserts what spawn does with a worktree it creates calls
+# fm_test_spawn_real_wt on the fakebin so spawn runs against the real wt and a
+# project from fm_test_spawn_project.
 fm_test_make_spawn_fakebin() {
   local dir=$1 fakebin
   shift
   fakebin=$(fm_fakebin "$dir")
   fm_test_fake_tmux_spawn "$fakebin"
-  fm_fake_exit0 "$fakebin" treehouse "$@"
+  fm_fake_wt_fixed "$fakebin"
+  [ "$#" -eq 0 ] || fm_fake_exit0 "$fakebin" "$@"
   printf '%s\n' "$fakebin"
+}
+
+# fm_test_spawn_real_wt <fakebin>
+# Drops the fixed wt stub so spawn uses the real Worktrunk wt; skips the whole
+# suite (exit 0 with the repo's `skip:` marker) where wt is not installed. The
+# pane path passed to fm_test_run_spawn is then the START path (the project) and
+# the fake tmux follows the cd spawn types into the worktree it creates.
+fm_test_spawn_real_wt() {
+  command -v wt >/dev/null 2>&1 || { echo "skip: wt (Worktrunk) not found"; exit 0; }
+  rm -f "$1/wt"
+}
+
+# fm_test_spawn_project <dir> [origin-dir]
+# A real scratch git project on branch main with one commit. With an origin-dir
+# it also gets a bare origin whose default branch is main, which is what spawn
+# bases a new worktree on. Never point it at a real checkout.
+fm_test_spawn_project() {
+  local dir=$1 origin=${2-}
+  fm_git_init_commit "$dir"
+  [ -z "$origin" ] || fm_git_add_origin "$dir" "$origin"
 }
 
 # Drop-in name used by the spawn suites. Extra args are additional exit-0 tools
@@ -287,7 +332,16 @@ fm_test_run_spawn() {
   # A test that needs the set case opts in through FM_TEST_CLAUDE_CONFIG_DIR.
   local spawn_home=$home/user-home
   mkdir -p "$spawn_home"
+  # Every run starts the pane at its start path, as a fresh window does.
+  [ -n "${FM_FAKE_PANE_FILE:-}" ] || rm -f "$home/.fake-pane-path"
+  # The same isolation covers Worktrunk: spawn creates its worktree with the real
+  # wt, which would otherwise read the developer's own wt config (and run its
+  # hooks). XDG_CONFIG_HOME defaults to a scratch dir; a case that needs a wt
+  # config (a failing hook) exports its own. FM_FAKE_PANE_FILE gives the fake
+  # tmux a per-home file to follow the typed `cd` into the new worktree.
   FM_ROOT_OVERRIDE='' FM_HOME="$home" HOME="$spawn_home" \
+    XDG_CONFIG_HOME="${XDG_CONFIG_HOME:-$spawn_home/.config}" \
+    FM_FAKE_PANE_FILE="${FM_FAKE_PANE_FILE:-$home/.fake-pane-path}" FM_FAKE_WT_PATH="$pane" \
     CLAUDE_CONFIG_DIR="${FM_TEST_CLAUDE_CONFIG_DIR:-}" \
     FM_STATE_OVERRIDE="$home/state" FM_DATA_OVERRIDE="$home/data" \
     FM_PROJECTS_OVERRIDE="$home/projects" FM_CONFIG_OVERRIDE="$home/config" \

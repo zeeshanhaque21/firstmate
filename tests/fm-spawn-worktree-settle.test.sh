@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# Regression test for the fm-spawn.sh treehouse-get worktree-detection settle
-# loop (bin/fm-spawn.sh, the `for _ in $(seq 1 60)` loop after `treehouse get`).
+# Regression test for the fm-spawn.sh worktree-detection settle loop (bin/fm-spawn.sh,
+# the `for _ in $(seq 1 60)` loop after spawn types `cd <worktree>` into the pane).
 #
 # On some tmux/WSL setups a brand-new window's pane_current_path transiently
 # reports a stale, unrelated-but-real path on the very first poll, before the
-# pane actually settles into the worktree treehouse get moved it to. That stale
+# pane actually settles into the worktree wt created. That stale
 # path still passes the loop's "differs from the project" check and
 # validate_spawn_worktree's "is a real, distinct worktree" check (it IS a real
 # git checkout, just the wrong one), so a naive single-read loop silently
@@ -13,12 +13,16 @@
 # asserts the recorded worktree resolves to the real, settled worktree, never
 # the stale first read.
 #
-# The same loop has a second transient to survive: `treehouse get` reports the
-# REPOSITORY's primary checkout as its own cwd while it is still preparing a
-# slot. From a linked spawning home that path is not the project, so a poll
-# comparing only against the project adopted it and the isolation guard then
-# refused the launch. The cases below cover both the transient and the pane
-# that never leaves the primary at all.
+# The same loop has a second transient to survive: the pane can still report the
+# REPOSITORY's primary checkout while the shell catches up with the cd. From a
+# linked spawning home that path is not the project, so a poll comparing only
+# against the project adopted it and the isolation guard then refused the
+# launch. The cases below cover both the transient and the pane that never
+# leaves the primary at all.
+#
+# The worktree is a real git worktree the suite owns and a fixed wt stub reports
+# as the one it created (the loop under test starts after creation, and the real
+# wt's own behavior is covered by tests/fm-spawn-wt.test.sh).
 set -u
 
 # shellcheck source=tests/fixtures.sh
@@ -61,7 +65,7 @@ esac
 exit 0
 SH
   chmod +x "$fakebin/tmux"
-  fm_fake_exit0 "$fakebin" treehouse
+  fm_fake_wt_fixed "$fakebin"
   printf '%s\n' "$fakebin"
 }
 
@@ -108,7 +112,7 @@ run_settle_spawn() {
     FM_STATE_OVERRIDE="$HOME_DIR/state" FM_DATA_OVERRIDE="$HOME_DIR/data" \
     FM_PROJECTS_OVERRIDE="$HOME_DIR/projects" FM_CONFIG_OVERRIDE="$HOME_DIR/config" \
     FM_SPAWN_NO_GUARD=1 TMUX="fake,1,0" \
-    FM_FAKE_PANE_PATH="$WT_DIR" FM_FAKE_PANE_STALE="$STALE_DIR" \
+    FM_FAKE_PANE_PATH="$WT_DIR" FM_FAKE_WT_PATH="$WT_DIR" FM_FAKE_PANE_STALE="$STALE_DIR" \
     FM_FAKE_PANE_STALE_READS="$STALE_READS" FM_FAKE_PANE_COUNTFILE="$COUNTFILE" \
     PATH="$FAKEBIN_DIR:$PATH" \
     "$SPAWN" "$id" "$PROJ_DIR" --mode no-mistakes --yolo off 2>&1
@@ -156,32 +160,31 @@ test_already_settled_pane_costs_one_confirm_read() {
 
 # make_primary_case <name> <id> <stale_reads> builds the linked-home shape: the
 # spawning project is itself a LINKED worktree of the repository, and the path
-# the pane transiently reports is that repository's PRIMARY checkout. `treehouse
-# get` reports the repository it is preparing a slot from as its own cwd while
-# it is still fetching and checking out, so the pane reads the primary for the
-# first seconds. The primary is not the spawning project, so a poll that only
-# compares against the project accepts it as the worktree, and the isolation
-# guard then refuses the launch even though treehouse went on to enter a real
-# slot. The settled path is a second linked worktree of the same repository.
+# the pane transiently reports is that repository's PRIMARY checkout, as it can
+# for the first seconds of a new window. The primary is not the spawning
+# project, so a poll that only compares against the project accepts it as the
+# worktree, and the isolation guard then refuses the launch even though the pane
+# went on to enter the real worktree. The settled path is a second linked
+# worktree of the same repository.
 make_primary_case() {
   local name=$1 id=$2 stale_reads=$3 case_dir home primary proj wt fakebin countfile
   case_dir="$TMP_ROOT/$name"
   home="$case_dir/home"
   primary="$case_dir/primary"
   proj="$case_dir/mate"
-  wt="$case_dir/slot"
+  wt="$case_dir/settled"
   countfile="$case_dir/pane-call-count"
   fakebin=$(make_settle_fakebin "$case_dir/fake")
   fm_test_spawn_home "$home" codex
   fm_git_worktree "$primary" "$proj" "mate-$name"
-  git -C "$primary" worktree add --quiet -b "slot-$name" "$wt"
+  git -C "$primary" worktree add --quiet -b "settled-$name" "$wt"
   fm_test_spawn_brief "$home" "$id" "Exercise primary-checkout transient detection for $id."
   printf '%s\n' "$case_dir|$home|$proj|$wt|$primary|$fakebin|$countfile|$stale_reads"
 }
 
 # The exact incident: the pane reports the repository primary for the first
-# reads, then settles into the slot treehouse actually created. The primary must
-# never be adopted as the worktree, so the spawn lands on the settled slot.
+# reads, then settles into the worktree wt created. The primary must never be
+# adopted as the worktree, so the spawn lands on the settled worktree.
 test_transient_primary_checkout_is_not_accepted() {
   local rec id out status
   id=settle-primary-transient-z3
@@ -211,7 +214,7 @@ test_primary_checkout_that_never_settles_fails_at_the_deadline() {
   out=$(run_settle_spawn "$id")
   status=$?
   [ "$status" -ne 0 ] || fail "spawn accepted a pane that never left the primary checkout"$'\n'"$out"
-  assert_contains "$out" "did not enter an isolated worktree" \
+  assert_contains "$out" "did not enter the isolated worktree" \
     "spawn did not explain that the pane never reached an isolated worktree"
   assert_contains "$out" "$STALE_DIR" \
     "the refusal did not name the path the pane kept reporting"
