@@ -628,10 +628,10 @@ task_holds_live_work() { # <id> <meta> <timeout> <last-status-line>; 0 when the 
   # shellcheck disable=SC2016
   verdict=$(fm_run_timed "$timeout" bash -c '
     . "$1"; . "$2"
-    [ "$(fm_backend_agent_state "$3" "$4" 2>/dev/null)" = alive ] || exit 0
+    [ "$(fm_backend_agent_state "$3" "$4" "$8" 2>/dev/null)" = alive ] || exit 0
     printf "alive "
     fm_busy_classify_meta "$5" "$6" "$7" 2>/dev/null' \
-    _ "$SCRIPT_DIR/fm-backend.sh" "$SCRIPT_DIR/fm-busy-lib.sh" "$backend" "$target" "$meta" "$id" "$STATE") || rc=$?
+    _ "$SCRIPT_DIR/fm-backend.sh" "$SCRIPT_DIR/fm-busy-lib.sh" "$backend" "$target" "$meta" "$id" "$STATE" "fm-$id") || rc=$?
   [ "$rc" -ne 124 ] || return 3
   case "$verdict" in
     'alive busy'*) return 0 ;;

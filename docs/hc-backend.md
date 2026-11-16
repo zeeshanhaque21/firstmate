@@ -85,7 +85,10 @@ hc_terminal=<address>
 `<address>` is hc's terminal address such as `t7`.
 Every adapter call sets exactly the recorded `HC_SESSION` and drops any inherited `HC_SOCKET`, which hc would otherwise prefer, so a task keeps reaching its own core even when the caller's environment names another one.
 `FM_HC_SOCKET` is the deliberate socket pin tests and labs use instead of an inherited `HC_SOCKET`.
-An input, capture, or close that carries the task label refuses a terminal whose `firstmate.task` or `firstmate.home` label does not match, and a close without a label still refuses a terminal that lacks this home's labels.
+An input, capture, or close that carries the task label refuses a terminal whose `firstmate.task` or `firstmate.home` label does not match.
+A key, text, submit, or close without a label, such as `bin/fm-send.sh` to an explicit `<session>:<address>` target, is treated as "any terminal carrying this home's task and home labels".
+It refuses an unlabelled terminal, one with only one of the two labels, and one labelled for another home, so a recorded or typed address that names the captain's own terminal never receives input and is never closed.
+Capture, current path, and composer reads stay label-optional because they change nothing.
 
 ## Operations
 
@@ -100,7 +103,7 @@ An input, capture, or close that carries the task label refuses a terminal whose
 | Named key | `hc keys` |
 | Current path | `hc get`, the foreground process's `cwd` |
 | Busy state | `hc get`, native `status.state` (`working` is busy) |
-| Agent state | `hc get`, the foreground process and its process group, through the shared classifier |
+| Agent state | `hc get`, the foreground process and its process group, through the shared classifier; callers with a task pass its label |
 | Close | `hc kill`, then `hc rm`, then `hc get` must answer not found |
 
 ## Limits
@@ -112,6 +115,10 @@ An input, capture, or close that carries the task label refuses a terminal whose
   A blocked terminal (exit 9) returns `unknown` without typing or retrying and is never forced.
 - hc reports one foreground process per terminal.
   When that process is a launcher, the adapter also reads the rest of its process group from `ps`, which works only for terminals on the local machine.
+- Agent state is `missing` only for a structured not-found or for a finished terminal that carries the expected labels.
+  A present terminal that does not carry them (the label defaults to any task label of this home) is `ambiguous`, never `dead` or `missing`, so an address that now names someone else's terminal cannot license a relaunch.
+- An aborted spawn closes the terminal it created, through the same guarded close, while no task record exists and the terminal still carries the task's labels, so the retry is not refused as a duplicate.
+  Once the record is published the record owns the terminal and an abort leaves it for teardown and recovery.
 - Right after a terminal starts, `hc get` can report no foreground process yet, and agent state reads `unreadable` until the shell is up.
 - `--secondmate` spawns are refused.
 - A worker inherits `HC_SESSION`, `HC_TERMINAL_ID`, `HC_TERMINAL_SOCKET`, and `HC_SCOPE` from its terminal, and the `config/launch-env-allowlist` floor keeps them; whether a real harness then reports native status under Firstmate's launch is not verified.
@@ -121,7 +128,7 @@ An input, capture, or close that carries the task label refuses a terminal whose
 
 ## Tests
 
-`tests/fm-backend-hc.test.sh` pins the adapter against a fake `hc`.
+`tests/fm-backend-hc.test.sh` pins the adapter against a fake `hc`, and `tests/fm-spawn-hc-abort.test.sh` pins the aborted-spawn cleanup through a real `bin/fm-spawn.sh` run against the same kind of fake.
 `tests/fm-backend-hc-liveness-live-e2e.test.sh` is the default-on live guard: it launches every installed harness bare in a private core and requires `alive`.
 `tests/fm-backend-hc-smoke.test.sh` drives the real binary in an isolated lab; [`bin/fm-hc-lab.sh`](../bin/fm-hc-lab.sh) owns the isolation and metadata-tripwire contract, and [`tests/hc-test-safety.sh`](../tests/hc-test-safety.sh) owns guarded test teardown.
 `tests/fm-backend-hc-appdetect-smoke.test.sh` runs a real `bin/fm-spawn.sh` spawn in the same kind of lab for the app-terminal and explicit cases, and checks that a live app window never selects hc for a marker-less process and starts nothing for a session with no running core.
