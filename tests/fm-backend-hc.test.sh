@@ -458,13 +458,13 @@ test_agent_state_matrix() {
 # exactly the shape fm-spawn's launch line produces. The old leader-only
 # classifier read the wrapper shell and reported `dead`.
 test_agent_state_real_wrapped_process_group() {
-  local d="$TMP_ROOT/realgrp" pid dead_pid=0 i got fifo
+  local d="$TMP_ROOT/realgrp" pid dead_pid=0 got fifo
   mkdir -p "$d"; reset
   use_real_group
   # wrapper sh (leader) -> bash exec'ing sleep as argv0 `claude`
   pid=$( set -m; /bin/sh -c 'bash -c "exec -a claude sleep 30"; true' </dev/null >/dev/null 2>&1 & echo $! )
   get_json t8 fm-abc live "{\"argv\":[\"/bin/sh\",\"-c\",\"x\"],\"cwd\":\"/l\",\"name\":\"sh\",\"pid\":$pid}"
-  for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
+  for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
     got=$(fm_backend_hc_group_members "$pid" | wc -l | tr -d ' ')
     [ "${got:-0}" -ge 2 ] && break
     sleep 0.25

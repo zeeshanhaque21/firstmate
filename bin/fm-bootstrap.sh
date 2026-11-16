@@ -800,7 +800,7 @@ secondmate_liveness_one() {  # <meta> <id>
   backend=$(fm_backend_of_meta "$meta")
   target=$(fm_backend_target_of_meta "$meta")
   [ -n "$target" ] || target="$window"
-  agent_state=$(fm_backend_agent_state "$backend" "$target" 2>/dev/null) || agent_state=unreadable
+  agent_state=$(fm_backend_agent_state "$backend" "$target" "fm-$id" 2>/dev/null) || agent_state=unreadable
   case "$harness" in
     claude|codex|opencode|pi|pi-signed|grok|kimi|omp) ;;
     *)
@@ -816,7 +816,7 @@ secondmate_liveness_one() {  # <meta> <id>
     dead|missing)
       if [ "$agent_state" = dead ]; then
         cause="confirmed agent absence on existing endpoint"
-        fm_backend_kill "$backend" "$target" 2>/dev/null || true
+        fm_backend_kill "$backend" "$target" "" "fm-$id" 2>/dev/null || true
       else
         cause="recorded endpoint confidently missing"
       fi
