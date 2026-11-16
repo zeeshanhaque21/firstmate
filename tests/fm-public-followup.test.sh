@@ -15,6 +15,9 @@ set -u
 # shellcheck source=tests/lib.sh
 # shellcheck disable=SC1091
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
+# Seeding, spawning and removing worktrees must only ever touch scratch repositories; this
+# fails the suite loudly if the repository hosting the tests gains a worktree or branch.
+fm_test_arm_repo_tripwire
 # shellcheck source=bin/fm-timeout-lib.sh
 . "$ROOT/bin/fm-timeout-lib.sh"
 

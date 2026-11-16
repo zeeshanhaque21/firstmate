@@ -1218,7 +1218,7 @@ for RESTART_ID in fm-hibit-resume-r1 wheelhouse-healing-r1; do
     || fail "could not reprovision the isolated session for $RESTART_ID validation"
   # Stopping the whole Herdr session also ends the anchor's agent. Its restored
   # shell remains useful as the durable layout anchor, but its task record no
-  # longer represents a live slot owner and must not poison later slot reuse.
+  # longer represents a live worktree owner and must not poison later worktree reuse.
   rm -f "$ANCHOR_META"
   lab pane get "$OLD_RESTART_PANE" >/dev/null 2>&1 \
     || fail "$RESTART_ID restart did not preserve the projected pane structurally"

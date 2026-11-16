@@ -4,6 +4,9 @@ set -u
 
 # shellcheck source=tests/lib.sh
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
+# Seeding, spawning and removing worktrees must only ever touch scratch repositories; this
+# fails the suite loudly if the repository hosting the tests gains a worktree or branch.
+fm_test_arm_repo_tripwire
 # shellcheck source=tests/remote-herdr-fixture.sh
 . "$(dirname "${BASH_SOURCE[0]}")/remote-herdr-fixture.sh"
 # shellcheck source=tests/herdr-client-pair-fixture.sh

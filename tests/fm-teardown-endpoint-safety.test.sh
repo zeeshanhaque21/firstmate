@@ -4,6 +4,9 @@ set -u
 
 # shellcheck source=tests/lib.sh
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
+# Seeding, spawning and removing worktrees must only ever touch scratch repositories; this
+# fails the suite loudly if the repository hosting the tests gains a worktree or branch.
+fm_test_arm_repo_tripwire
 
 TEARDOWN="$ROOT/bin/fm-teardown.sh"
 TMP_ROOT=$(fm_test_tmproot fm-teardown-endpoint-safety)

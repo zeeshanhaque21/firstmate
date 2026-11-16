@@ -626,12 +626,12 @@ test_hook_silent_in_secondmate_child_worktree() {
 # worktree so it can never silently regress back into a plain-checkout shape.
 test_hook_blocks_in_wt_created_secondmate_home() {
   local base dir gd gcd out status
-  base="$TMP_ROOT/hook-sm-leased-base"
-  dir="$TMP_ROOT/hook-sm-leased-home"
+  base="$TMP_ROOT/hook-sm-wt-base"
+  dir="$TMP_ROOT/hook-sm-wt-home"
   make_secondmate_linked_home_dir "$base" "$dir" >/dev/null
   gd=$(git -C "$dir" rev-parse --git-dir)
   gcd=$(git -C "$dir" rev-parse --git-common-dir)
-  [ "$gd" != "$gcd" ] || fail "leased-home fixture must be a linked worktree (git-dir != git-common-dir), got equal: $gd"
+  [ "$gd" != "$gcd" ] || fail "wt-home fixture must be a linked worktree (git-dir != git-common-dir), got equal: $gd"
   : > "$dir/state/task1.meta"
   out=$(run_hook "$dir" false); status=$?
   expect_code 2 "$status" "hook must GUARD a wt-created (linked) secondmate home via its marker when unhealthy"

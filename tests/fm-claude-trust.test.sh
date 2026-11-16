@@ -688,15 +688,15 @@ test_secondmate_standalone_clone_home_is_trusted() {
 # does not depend on which shape the home happens to have.
 test_secondmate_wt_worktree_home_is_trusted() {
   local case_dir home out
-  case_dir="$TMP_ROOT/sm-leased-spawn"
-  home="$case_dir/leased/home"
-  mkdir -p "$case_dir/leased"
-  seed_secondmate_home "$home" leased-n1 worktree
-  out=$(spawn_secondmate_claude "$case_dir" "$home" leased-n1)
-  expect_code 0 $? "a claude secondmate spawn into a leased worktree home must succeed: $out"
+  case_dir="$TMP_ROOT/sm-wt-spawn"
+  home="$case_dir/wt-home/home"
+  mkdir -p "$case_dir/wt-home"
+  seed_secondmate_home "$home" wt-n1 worktree
+  out=$(spawn_secondmate_claude "$case_dir" "$home" wt-n1)
+  expect_code 0 $? "a claude secondmate spawn into a wt-created worktree home must succeed: $out"
   assert_trusted "$case_dir/claude-config/.claude.json" "$home" \
-    "the claude secondmate spawn did not pre-register trust for its leased worktree home"
-  pass "fm-spawn.sh: a claude secondmate spawn pre-trusts a leased worktree home"
+    "the claude secondmate spawn did not pre-register trust for its wt-created worktree home"
+  pass "fm-spawn.sh: a claude secondmate spawn pre-trusts a wt-created worktree home"
 }
 
 # The seed is the whole security boundary for home-level trust, so every path

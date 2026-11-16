@@ -32,6 +32,9 @@ set -u
 
 # shellcheck source=tests/lib.sh
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
+# Seeding, spawning and removing worktrees must only ever touch scratch repositories; this
+# fails the suite loudly if the repository hosting the tests gains a worktree or branch.
+fm_test_arm_repo_tripwire
 fm_git_identity fmtest fmtest@example.invalid
 
 # shellcheck source=/dev/null
@@ -1087,7 +1090,7 @@ test_spawn_symlinked_project_prefix_avoids_false_refusal() {
 # --- fm-teardown.sh: worktree removal and tmux cleanup contract ---------------
 #
 # Not an old-vs-new diff: the pre-refactor teardown returned the worktree to a
-# pool, which the wt-based teardown does not do, so there is no byte-identical
+# pool, which the wt-based teardown does not use, so there is no byte-identical
 # baseline. The two commands that matter are asserted directly: the worktree is
 # removed with `wt -C <project> remove <worktree> --foreground` and never with a
 # force flag, and the window is closed with exact session and window selectors.

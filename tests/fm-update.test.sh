@@ -4,7 +4,7 @@
 #
 # The guarantees under test mirror fm-fleet-sync.sh and prime directive #3:
 #   - The running firstmate repo (on its default branch) fast-forwards from
-#     origin; a leased secondmate home (detached HEAD on the default branch)
+#     origin; a wt-created secondmate home (detached HEAD on the default branch)
 #     fast-forwards the same way.
 #   - A dirty, offline, wrong-branch, or genuinely unique diverged target is
 #     skipped and reported, never forced or stashed, so unlanded work survives.

@@ -8,7 +8,7 @@
 # many former positive unit tests (registry scope/charter/clone/mode, spawn meta,
 # bare-window send, recovery respawn, teardown of an empty home, backlog handoff)
 # collapse into one lifecycle. The path-boundary safety invariants and the
-# lease-specific paths live in fm-secondmate-safety.test.sh.
+# wt-home-specific paths live in fm-secondmate-safety.test.sh.
 #
 # Coverage anchored here (must not regress):
 #   - registry line records scope (from a filled charter brief) and project list

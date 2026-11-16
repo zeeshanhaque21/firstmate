@@ -2028,11 +2028,11 @@ EOF
 
 test_secondmate_force_teardown_refuses_duplicated_child_worktree() {
   local home subhome childproj childwt fakebin log err rc
-  home="$TMP_ROOT/force-duplicate-slot-home"
-  subhome="$TMP_ROOT/force-duplicate-slot-subhome"
+  home="$TMP_ROOT/force-duplicate-worktree-home"
+  subhome="$TMP_ROOT/force-duplicate-worktree-subhome"
   childproj="$subhome/projects/alpha"
   childwt="$TMP_ROOT/force-duplicate-child-worktree/alpha"
-  err="$TMP_ROOT/force-duplicate-slot.err"
+  err="$TMP_ROOT/force-duplicate-worktree.err"
   mkdir -p "$home/state" "$home/data" "$subhome/state" "$(dirname "$childwt")"
   fm_git_worktree "$childproj" "$childwt" duplicate-child
   printf 'domain\n' > "$subhome/.fm-secondmate-home"
@@ -2059,12 +2059,12 @@ mode=no-mistakes
 yolo=off
 EOF
   done
-  fakebin=$(make_fake_tmux "$TMP_ROOT/force-duplicate-slot-fake")
-  log="$TMP_ROOT/force-duplicate-slot-fake/tmux.log"
+  fakebin=$(make_fake_tmux "$TMP_ROOT/force-duplicate-worktree-fake")
+  log="$TMP_ROOT/force-duplicate-worktree-fake/tmux.log"
 
   set +e
   PATH="$fakebin:$PATH" FM_HOME="$home" FM_FAKE_TMUX_LOG="$log" \
-    FM_FAKE_TMUX_CAPTURE="$TMP_ROOT/force-duplicate-slot-fake/pane.txt" \
+    FM_FAKE_TMUX_CAPTURE="$TMP_ROOT/force-duplicate-worktree-fake/pane.txt" \
     "$ROOT/bin/fm-teardown.sh" domain --force >/dev/null 2>"$err"
   rc=$?
   set -e

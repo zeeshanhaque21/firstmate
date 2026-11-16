@@ -25,6 +25,9 @@ set -u
 
 # shellcheck source=tests/lib.sh
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
+# Seeding, spawning and removing worktrees must only ever touch scratch repositories; this
+# fails the suite loudly if the repository hosting the tests gains a worktree or branch.
+fm_test_arm_repo_tripwire
 
 # An exported TASKS_AXI_BACKEND would outrank each case's .tasks.toml fixture
 # in fm_tasks_axi_backend, so the backend cases must start from a clean slate.
@@ -51,7 +54,7 @@ pin_markdown_backend() {  # <addressing-root>
   printf '%s\n' 'backend = "markdown"' > "$1/.tasks.toml"
 }
 
-# A home with a real backlog, a real project clone with an origin, a pooled
+# A home with a real backlog, a real project clone with an origin, a linked
 # worktree, and stubs for every tool the spawn path shells out to.
 make_home() {  # <name> [task-id...]
   local name=$1 case_dir home fakebin id
@@ -100,7 +103,7 @@ SH
 
   fm_git_init_commit "$case_dir/project"
   fm_git_add_origin "$case_dir/project" "$case_dir/project.origin.git"
-  git -C "$case_dir/project" worktree add --quiet -b pooled "$case_dir/wt"
+  git -C "$case_dir/project" worktree add --quiet -b linked "$case_dir/wt"
 
   printf '%s\n' "$case_dir"
 }
