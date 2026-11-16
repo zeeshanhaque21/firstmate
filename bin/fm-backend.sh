@@ -967,7 +967,7 @@ fm_backend_target_exists() {  # <backend> <target> [expected-label]
 # adapter owns its own classifier (docs/hc-backend.md). The optional
 # [expected-label] (fm-<task-id>) is read only by the hc adapter, where a
 # terminal under any other name reads `ambiguous`, never `dead`; callers that
-# know the task pass it, and without it hc requires only an `fm-` name prefix.
+# know the task pass it, and without it hc refuses and reads `unreadable`.
 fm_backend_agent_state() {  # <backend> <target> [expected-label]
   local backend=$1 target=$2 expected_label=${3:-}
   fm_backend_source "$backend" || { printf 'unverified'; return 0; }

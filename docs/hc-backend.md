@@ -31,8 +31,7 @@ A name is 1-32 characters from a-z 0-9 - _, and only live terminals compete for 
 hc can renumber addresses after a server restart, so a recorded address alone must never reach a terminal that holds someone else's work.
 Every action that sends input, kills, or reads a screen first confirms that `hc get <addr>` returns a `.name` exactly equal to the expected label `fm-<task-id>`.
 It then confirms that `hc get <label>` maps back to the same address, and acts on the NAME, so the final call cannot land on a different terminal.
-Actions (`send`, `keys`, `kill`) refuse when no expected label is supplied.
-Read-only calls without a label accept only an `fm-` name prefix.
+Every call, read-only ones included, refuses when no expected label is supplied; `agent_state` then reports `unreadable`.
 A present terminal under another name, or no name, is refused and `agent_state` reports `ambiguous`, never `dead`, so it cannot license a relaunch.
 Only a definitive `not_found` is `missing`.
 The expected label is the last optional argument of every adapter function, as the dispatcher in `bin/fm-backend.sh` passes it (`kill` takes it third: target, unused tab id, label).
