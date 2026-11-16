@@ -1,0 +1,13 @@
+ok - a normal spawn creates fm/<id> through real wt and records the worktree
+ok - a failing pre-start hook strands nothing and the same id can be retried
+ok - a slow pre-start hook is bounded, cleaned up, and the id can be retried
+ok - a spawn aborted after the worktree was created removes it
+ok - an aborted hc spawn closes only the terminal it created and removes its worktree
+# refused bad..name: error: task id 'bad..name' cannot form a valid git branch name (fm/bad..name)
+# refused trail.lock: error: task id 'trail.lock' cannot form a valid git branch name (fm/trail.lock)
+# refused sp ace: error: invalid task id
+# refused at@{x: error: invalid task id
+ok - task ids that cannot form a valid fm/<id> branch name are refused
+ok - a project reached through a symlink spawns
+ok - a project without origin spawns from the local default branch
+ok - an origin default branch other than main is the worktree base

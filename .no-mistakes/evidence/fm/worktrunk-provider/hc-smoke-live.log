@@ -1,0 +1,11 @@
+ok - create_task created fm-test-smoke-22029 at t2m
+ok - create_task refuses a live duplicate name
+ok - target_exists, resolve_bare_selector, and the fm_task label
+ok - agent_state: idle shell reads dead
+ok - current_path follows cd via .foreground.cwd while .cwd stays frozen
+ok - send_text_line runs a command; capture sees its output and bounds lines
+ok - agent_state: foreground job is ambiguous; send_key C-c returns the shell to dead
+ok - send_literal types without submitting; C-u clears; unmappable text is refused
+ok - send_text_submit typed once and ran once (verdict=empty)
+ok - kill ends and removes the terminal; agent_state reads missing
+ok - tripwire: hc ls addresses unchanged (omarchy/t1,omarchy/t5,omarchy/t7,t1,t19,t1x,t1y,t1z,t22,t23,t26,t29,t2b,t2f,t2g,t2h,t2j,t2k,t5,t7), no fm-test-* terminal left

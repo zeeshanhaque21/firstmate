@@ -1,0 +1,14 @@
+ok - fm-teardown: missing, empty, malformed, ambiguous, and task-mismatched endpoints refuse before every mutation or runtime call
+ok - fm-teardown: a concurrent lifecycle action refuses before mutation
+ok - fm-teardown: worktree-independent cleanup ignores unrelated task publication locks
+ok - fm-teardown: destructive cleanup serializes with metadata writers
+ok - cleanup identity: valid tmux, Herdr, Zellij, Orca, cmux, and hc records validate while every empty backend target refuses
+ok - tmux backend: direct empty target returns nonzero without invoking tmux
+ok - process cleanup: creation-time PID identity removes only the exact child and preserves the control child
+ok - fm-teardown: exact tmux cleanup preserves invalid and prefix-matched neighbors while removing only the recorded target
+ok - fm-teardown: a worktree named by a second task record is never removed, killed, or reset
+ok - fm-teardown: a worktree held by another firstmate home is never removed
+ok - fm-teardown: a task that solely holds its worktree still removes it
+ok - fm-teardown: an exact recorded endpoint still tears down after changing cwd outside its worktree
+ok - fm-teardown: a remote-seeded secondmate home removes its own uncontested worktree
+ok - fm-teardown: worktree ownership across a remote-seeded home and its local child still refuses

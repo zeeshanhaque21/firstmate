@@ -1,0 +1,20 @@
+ok - bin prefers herdr-core, falls back to hc, fails with neither; tool_check follows
+ok - target_valid accepts only local tN addresses (lowercase alphanumeric, as hc hands out t1h)
+ok - create_task prints the address and always passes --no-parent --no-notify
+ok - create_task refuses a live name collision, ignores finished ones
+ok - create_task refuses non-local, missing, failed, and invalid cases
+ok - kill refuses non-tN targets without calling hc
+ok - kill requires the exact expected name, acts on the name, tolerates gone terminals
+ok - every input/read action is refused for unnamed, foreign, renumbered, or label-less terminals before hc is asked to act
+ok - send_key maps Enter/Escape/C-c/C-u and refuses bad targets
+ok - capture bounds output to the last N lines, reads only name-verified terminals
+ok - current_path reads .foreground.cwd, never the frozen .cwd
+ok - agent_state: dead/alive/missing/ambiguous/unreadable matrix (never dead on failure or a foreign name)
+ok - agent_state classifies the whole foreground group with real processes (sh -c wrapper -> alive)
+ok - target_exists is true only for a live, name-verified local terminal
+ok - send_text_line pastes after --, send_literal types per key and refuses the rest
+ok - send_text_submit types once, retries Enter only, returns the shared verdicts
+ok - M4: real pi screens classify empty (idle/done), pending (draft), unknown (working/no identity)
+ok - M4: a pi send is confirmed by the native idle-to-working transition, only from an idle baseline
+ok - queued Enter is empty only while hc reports the agent working
+ok - container_ensure and resolve_bare_selector contracts
