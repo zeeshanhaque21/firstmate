@@ -29,7 +29,7 @@ cleanup() {
   [ -z "$LAB" ] || rm -rf -- "$LAB"
 }
 
-fm_live_gate opt-in FM_CMUX_CLAUDE_COMPOSER_LIVE claude cmux jq treehouse python3
+fm_live_gate opt-in FM_CMUX_CLAUDE_COMPOSER_LIVE claude cmux jq wt python3
 
 cmux ping >/dev/null 2>&1 || fail "FM_CMUX_CLAUDE_COMPOSER_LIVE=1 but the cmux socket is unavailable"
 

@@ -8,14 +8,15 @@
 #   1. Unit-tests bin/fm-backend.sh's selection, meta, and dispatch helpers.
 #   2. Runs the PRE-REFACTOR versions of fm-send.sh, fm-peek.sh, fm-spawn.sh,
 #      and fm-teardown.sh (checked out from the merge-base with `main`, the
-#      commit this branch started from) against the SAME fake tmux/treehouse
-#      binaries and fixtures as the REFACTORED versions in this checkout, then
+#      commit this branch started from) against the SAME fake tmux binaries
+#      and fixtures as the REFACTORED versions in this checkout, then
 #      diffs the two command logs byte-for-byte - the report's P1 checklist
 #      item "run current main scripts and refactored scripts against the same
-#      fake tools and compare command logs". The teardown old-vs-new case also
-#      overlays a content-historical permissive tmux kill fixture: after the
-#      exact-selector change lands on the default branch, merge-base with main
-#      collapses to HEAD and can no longer supply that baseline.
+#      fake tools and compare command logs" - for fm-send.sh and fm-peek.sh.
+#      Spawn and teardown are no longer compared against the pre-refactor
+#      scripts: they create and remove worktrees with Worktrunk's wt, which the
+#      pooled-worktree baseline cannot do, so their command contracts are asserted
+#      directly instead.
 #   3. Asserts the `--backend`/`FM_BACKEND` selection refuses unknown backends
 #      and the blocked `codex-app` backend loudly.
 #
@@ -125,30 +126,6 @@ resolve_base_ref() {
 BASE_REF=$(resolve_base_ref) \
   || fail "fm-backend baseline requires local main or origin/main; fetch the default branch before running this test"
 
-# Newest first-parent revision whose bin/backends/tmux.sh still uses the
-# pre-exact permissive kill-window target. Content-addressed from history so the
-# fixture stays historical on default-branch CI and on branches cut after the
-# exact-selector change, where merge-base with main is self-referential.
-resolve_permissive_tmux_kill_ref() {
-  local commit body
-  while IFS= read -r commit; do
-    [ -n "$commit" ] || continue
-    body=$(git -C "$ROOT" show "$commit:bin/backends/tmux.sh" 2>/dev/null) || continue
-    # shellcheck disable=SC2016
-    case "$body" in
-      *'tmux kill-window -t "=$session:=$window"'*) continue ;;
-    esac
-    # shellcheck disable=SC2016
-    case "$body" in
-      *'tmux kill-window -t "$1"'*|*'tmux kill-window -t "$target"'*)
-        printf '%s\n' "$commit"
-        return 0
-        ;;
-    esac
-  done < <(git -C "$ROOT" log --first-parent --format='%H' HEAD -- bin/backends/tmux.sh)
-  return 1
-}
-
 # --- shared: a pre-refactor bin/ shim --------------------------------------
 #
 # build_old_bin echoes a directory whose bin/ subdir is the complete bin/ tree
@@ -159,8 +136,6 @@ resolve_permissive_tmux_kill_ref() {
 # before it reaches the behavior under test.
 # FM_ROOT_OVERRIDE pointed at this dir's root makes
 # "$FM_ROOT/bin/fm-project-mode.sh" (etc.) resolve correctly.
-# The teardown conformance case applies its explicitly historical tmux adapter
-# after this complete baseline has been materialized.
 
 build_old_bin() {  # <name> -> echoes root dir (root/bin/<script> is the entry point)
   local name=$1 root archive
@@ -551,13 +526,13 @@ test_hc_known_validated_and_required_tools() {
   fm_backend_validate hc 2>/dev/null || fail "fm_backend_validate should accept hc"
   fm_backend_validate_spawn hc 2>/dev/null || fail "fm_backend_validate_spawn should accept hc"
   out=$(fm_backend_required_tools hc) || fail "fm_backend_required_tools should know hc"
-  assert_equals 'herdr-core jq' "$out" "hc requires exactly herdr-core and jq (worktrees come from wt)"
-  assert_not_contains "$out" treehouse "hc must not list treehouse"
+  assert_equals 'herdr-core jq wt' "$out" "hc requires exactly herdr-core, jq and wt (wt creates every worktree)"
 
   mkdir -p "$dir/with" "$dir/without"
   printf '#!/bin/sh\nexit 0\n' > "$dir/with/herdr-core"
   printf '#!/bin/sh\nexit 0\n' > "$dir/with/jq"
-  chmod +x "$dir/with/herdr-core" "$dir/with/jq"
+  printf '#!/bin/sh\nexit 0\n' > "$dir/with/wt"
+  chmod +x "$dir/with/herdr-core" "$dir/with/jq" "$dir/with/wt"
   # The library is sourced with the real PATH first (it shells out to dirname),
   # then PATH is narrowed to a fake dir so `command -v herdr-core` is hermetic
   # even on a host that has the real binary installed.
@@ -565,9 +540,11 @@ test_hc_known_validated_and_required_tools() {
     || fail "herdr-core on PATH should satisfy the hc tool check"
   bash -c ". '$ROOT/bin/fm-backend.sh'; PATH='$dir/without'; fm_backend_required_tool_available hc herdr-core" \
     && fail "a missing herdr-core must fail the hc tool check"
-  bash -c ". '$ROOT/bin/fm-backend.sh'; PATH='$dir/with'; fm_backend_required_tool_available hc treehouse" \
-    && fail "treehouse is not an hc tool"
-  pass "hc: known, validate and validate_spawn accept it; required tools are exactly 'herdr-core jq'"
+  bash -c ". '$ROOT/bin/fm-backend.sh'; PATH='$dir/with'; fm_backend_required_tool_available hc wt" \
+    || fail "wt on PATH should satisfy the hc tool check"
+  bash -c ". '$ROOT/bin/fm-backend.sh'; PATH='$dir/with'; fm_backend_required_tool_available hc tmux" \
+    && fail "tmux is not an hc tool"
+  pass "hc: known, validate and validate_spawn accept it; required tools are exactly 'herdr-core jq wt'"
 }
 
 test_hc_detect_precedence() {
@@ -637,8 +614,15 @@ test_hc_validate_task_endpoint() {
   out=$(fm_backend_validate_task_endpoint "$meta" hc1 2>&1) && fail "a remote address must be refused"
   assert_contains "$out" "not a local terminal address" "remote address refusal message"
 
+  # hc terminal addresses are `t` plus alphanumerics (t7, tt, t7a, t1c are all real).
+  local good
+  for good in t7 t7a tt t1c; do
+    fm_write_meta "$meta" "window=$good" endpoint_task_id=hc1 worktree=/wt/hc1 project=/proj backend=hc
+    out=$(fm_backend_validate_task_endpoint "$meta" hc1 2>&1) || fail "hc window '$good' must validate: $out"
+  done
+
   local bad
-  for bad in t tt t7a 7 fm-hc1 ' t7' 't7 '; do
+  for bad in t 7 fm-hc1 ' t7' 't7 ' 't7;rm' 't7/x' 'omarchy/t7' 'T7' ''; do
     fm_write_meta "$meta" "window=$bad" endpoint_task_id=hc1 worktree=/wt/hc1 project=/proj backend=hc
     out=$(fm_backend_validate_task_endpoint "$meta" hc1 2>&1) && fail "hc window '$bad' must be refused"
   done
@@ -650,7 +634,7 @@ test_hc_validate_task_endpoint() {
   fm_write_meta "$meta" window=t7 endpoint_task_id=other worktree=/wt/hc1 project=/proj backend=hc
   out=$(fm_backend_validate_task_endpoint "$meta" hc1 2>&1) && fail "a binding for another task must be refused"
   assert_contains "$out" "belongs to task other, not hc1" "foreign binding refusal message"
-  pass "hc: task endpoint validation accepts a bound local t<N> and refuses remote, malformed, unbound, and foreign records"
+  pass "hc: task endpoint validation accepts a bound local t<alphanumerics> and refuses remote, malformed, unbound, and foreign records"
 }
 
 test_hc_dispatch_routes_to_adapter() {
@@ -958,7 +942,14 @@ esac
 exit 0
 SH
   chmod +x "$fb/tmux"
-  fm_fake_exit0 "$fb" treehouse
+  # The suite owns a real git worktree for the task; this wt reports it as the one
+  # it created, in the JSON shape the real wt prints.
+  cat > "$fb/wt" <<SH
+#!/usr/bin/env bash
+case " \$* " in *" switch "*) printf '{"action":"created","branch":"fm/fake","path":"$wt"}\\n' ;; esac
+exit 0
+SH
+  chmod +x "$fb/wt"
   printf '%s\n' "$fb"
 }
 
@@ -967,6 +958,7 @@ run_spawn_case() {  # <bin-root> <fakebin> <log> <state> <data> <config> <proj> 
   [ "${1:-}" = -- ] && shift
   : > "$log"
   env PATH="$fb:$PATH" FM_ROOT_OVERRIDE="$bin" HOME="$SPAWN_HOME" CLAUDE_CONFIG_DIR='' \
+    XDG_CONFIG_HOME="$TMP_ROOT/xdg-config" \
     FM_STATE_OVERRIDE="$state" FM_DATA_OVERRIDE="$data" FM_CONFIG_OVERRIDE="$config" \
     FM_PROJECTS_OVERRIDE="$TMP_ROOT/unused-projects" \
     FM_SPAWN_NO_GUARD=1 TMUX="fake,1,0" FM_TMUX_LOG="$log" \
@@ -995,7 +987,7 @@ run_spawn_case() {  # <bin-root> <fakebin> <log> <state> <data> <config> <proj> 
 # (tmux, herdr) reports the OS-level PHYSICALLY-resolved cwd. When the project
 # itself lives under a symlinked prefix (e.g. macOS's /tmp -> /private/tmp),
 # fm-spawn.sh's PROJ_ABS - a logical `cd && pwd` - differs string-for-string
-# from that physical read even before treehouse moves the pane at all, so the
+# from that physical read even before the shell has moved the pane at all, so the
 # worktree-discovery poll used to mistake an UNMOVED pane for one that had
 # already left the project, handing validate_spawn_worktree the project's own
 # directory as "the worktree" and tripping its false isolation refusal.
@@ -1003,10 +995,13 @@ run_spawn_case() {  # <bin-root> <fakebin> <log> <state> <data> <config> <proj> 
 # first pane_current_path poll, then the real worktree path from the second poll
 # onward, so this test fails loudly if the PROJ_ABS/PROJ_ABS_REAL
 # canonicalization in bin/fm-spawn.sh ever regresses.
-make_spawn_symlink_fakebin() {  # <dir> <initial-project-path> <worktree-path> -> echoes fakebin dir
-  local dir=$1 initial_path=$2 wt=$3 fb="$1/fakebin" counter="$1/poll-count"
+make_spawn_symlink_fakebin() {  # <dir> <initial-project-path> -> echoes fakebin dir
+  local dir=$1 initial_path=$2 fb="$1/fakebin" counter="$1/poll-count" cdfile="$1/pane-cd"
   mkdir -p "$fb"
   : > "$counter"
+  : > "$cdfile"
+  # The pane starts at the project on the first poll, then follows the `cd` spawn
+  # types into the worktree the real wt created (the path is not known up front).
   cat > "$fb/tmux" <<SH
 #!/usr/bin/env bash
 set -u
@@ -1015,32 +1010,42 @@ case "\${1:-}" in
   display-message)
     for a in "\$@"; do case "\$a" in *pane_current_path*)
       printf x >> "$counter"
-      if [ "\$(wc -c < "$counter")" -le 1 ]; then
+      if [ "\$(wc -c < "$counter")" -le 1 ] || [ ! -s "$cdfile" ]; then
         printf '%s\\n' "$initial_path"
       else
-        printf '%s\\n' "$wt"
+        cat "$cdfile"
       fi
       exit 0
     ;; esac; done
     printf 'firstmate\\n'; exit 0 ;;
   list-windows) exit 0 ;;
+  send-keys)
+    for a in "\$@"; do
+      case "\$a" in
+        "cd "*) eval "set -- \${a#cd }"; printf '%s\\n' "\$1" > "$cdfile" ;;
+      esac
+    done
+    exit 0 ;;
 esac
 exit 0
 SH
   chmod +x "$fb/tmux"
-  fm_fake_exit0 "$fb" treehouse
   printf '%s\n' "$fb"
 }
 
 run_spawn_symlink_case() {  # <label> <physical|logical>
   local label=$1 first_reply=$2 real_root link_root proj wt id fb data state config log out rc proj_phys initial_path
+  # The worktree is created by the real wt, so this case needs it installed.
+  command -v wt >/dev/null 2>&1 || { echo "skip: wt (Worktrunk) not found"; return 0; }
   real_root="$TMP_ROOT/symlink-real-$label"; link_root="$TMP_ROOT/symlink-link-$label"
   mkdir -p "$real_root"
   ln -s "$real_root" "$link_root"
   proj="$link_root/proj"
-  wt="$TMP_ROOT/symlink-wt-$label"
   id="spawnsymlink$label"
-  fm_git_worktree "$real_root/proj" "$wt" "fm/$id"
+  # A real project with an origin, reached through the symlinked prefix. Spawn
+  # creates the worktree itself, so there is nothing to pre-create here.
+  fm_git_init_commit "$real_root/proj"
+  fm_git_add_origin "$real_root/proj" "$real_root/proj.origin.git"
   # TMP_ROOT itself can already sit behind an OS-level symlink (e.g. macOS's
   # /var -> /private/var), so resolve the fakebin's "physical" reply with
   # pwd -P rather than string concatenation - it must match exactly what
@@ -1052,7 +1057,7 @@ run_spawn_symlink_case() {  # <label> <physical|logical>
     logical) initial_path=$proj ;;
     *) fail "unknown symlink first-reply mode: $first_reply" ;;
   esac
-  fb=$(make_spawn_symlink_fakebin "$TMP_ROOT/symlink-fake-$label" "$initial_path" "$wt")
+  fb=$(make_spawn_symlink_fakebin "$TMP_ROOT/symlink-fake-$label" "$initial_path")
   data="$TMP_ROOT/symlink-data-$label"
   mkdir -p "$data/$id"
   write_spawn_brief "$data/$id/brief.md" "$id"
@@ -1063,6 +1068,10 @@ run_spawn_symlink_case() {  # <label> <physical|logical>
   out=$(run_spawn_case "$ROOT" "$fb" "$log" "$state" "$data" "$config" "$proj" -- "$id" "$proj" claude --mode no-mistakes --yolo off 2>&1)
   rc=$?
   expect_code 0 "$rc" "fm-spawn.sh should succeed for a project reached through a symlinked prefix when the backend reports $first_reply cwd"$'\n'"$out"
+  # The worktree wt created for fm/<id>, read back from git rather than guessed.
+  wt=$(git -C "$real_root/proj" worktree list --porcelain \
+    | awk -v b="refs/heads/fm/$id" '/^worktree /{p=substr($0,10)} $0=="branch " b {print p}')
+  [ -n "$wt" ] || fail "wt did not create a worktree on fm/$id"
   assert_contains "$out" "worktree=$wt" \
     "fm-spawn.sh did not resolve a symlinked-prefix project to its real worktree when the backend reports $first_reply cwd"
 
@@ -1075,9 +1084,15 @@ test_spawn_symlinked_project_prefix_avoids_false_refusal() {
   pass "fm-spawn.sh: a project reached through a symlinked prefix (e.g. macOS /tmp -> /private/tmp) does not trip the isolation guard's false refusal"
 }
 
-# --- old vs new: fm-teardown.sh ----------------------------------------------
+# --- fm-teardown.sh: worktree removal and tmux cleanup contract ---------------
+#
+# Not an old-vs-new diff: the pre-refactor teardown returned the worktree to a
+# pool, which the wt-based teardown does not do, so there is no byte-identical
+# baseline. The two commands that matter are asserted directly: the worktree is
+# removed with `wt -C <project> remove <worktree> --foreground` and never with a
+# force flag, and the window is closed with exact session and window selectors.
 
-make_teardown_fakebin() {  # <dir> -> echoes fakebin dir; logs tmux+treehouse calls
+make_teardown_fakebin() {  # <dir> -> echoes fakebin dir; logs tmux+wt calls
   local dir=$1 fb="$1/fakebin"
   mkdir -p "$fb"
   cat > "$fb/tmux" <<'SH'
@@ -1086,46 +1101,18 @@ set -u
 { printf 'tmux'; for a in "$@"; do printf '\x1f%s' "$a"; done; printf '\n'; } >> "${FM_TMUX_LOG:?}"
 exit 0
 SH
-  cat > "$fb/treehouse" <<'SH'
+  cat > "$fb/wt" <<'SH'
 #!/usr/bin/env bash
 set -u
-{ printf 'treehouse'; for a in "$@"; do printf '\x1f%s' "$a"; done; printf '\n'; } >> "${FM_TMUX_LOG:?}"
+{ printf 'wt'; for a in "$@"; do printf '\x1f%s' "$a"; done; printf '\n'; } >> "${FM_TMUX_LOG:?}"
 exit 0
 SH
-  chmod +x "$fb/tmux" "$fb/treehouse"
+  chmod +x "$fb/tmux" "$fb/wt"
   printf '%s\n' "$fb"
 }
 
-# run_teardown_case <script> <fm-root-override> <fakebin> <log> <state> <data> <config> <id>
-# FM_ROOT_OVERRIDE is passed separately from <script> so both the old and new
-# runs can point it at the SAME neutral (non-git) shim root - that root's
-# bin/fm-guard.sh is a symlink to the real, unchanged script, so the
-# worktree-tangle check runs identically (and silently) for both, regardless
-# of which fm-teardown.sh (old or new) is actually being invoked.
-run_teardown_case() {
-  local script=$1 fmroot=$2 fb=$3 log=$4 state=$5 data=$6 config=$7 id=$8
-  : > "$log"
-  env PATH="$fb:$PATH" FM_ROOT_OVERRIDE="$fmroot" \
-    FM_STATE_OVERRIDE="$state" FM_DATA_OVERRIDE="$data" FM_CONFIG_OVERRIDE="$config" \
-    FM_TMUX_LOG="$log" \
-    "$script" "$id"
-}
-
-test_teardown_conformance_old_vs_new() {
-  local old_bin fb proj wt id old_tmux_ref saved_base_ref
-  local state_old state_new config_old config_new data log_old log_new out_old out_new rc_old rc_new
-  # Force the post-squash topology inside this case: merge-base with main may
-  # equal HEAD on default-branch CI, and that must not make the legacy kill
-  # fixture self-referential. build_old_bin still uses BASE_REF for entrypoints;
-  # only the tmux kill adapter is pinned to the content-historical permissive ref.
-  saved_base_ref=$BASE_REF
-  BASE_REF=$(git -C "$ROOT" rev-parse HEAD)
-  old_tmux_ref=$(resolve_permissive_tmux_kill_ref) \
-    || { BASE_REF=$saved_base_ref; fail "unable to locate a historical bin/backends/tmux.sh with permissive kill-window selectors"; }
-  old_bin=$(build_old_bin teardown-old)
-  git -C "$ROOT" show "$old_tmux_ref:bin/backends/tmux.sh" > "$old_bin/bin/backends/tmux.sh" \
-    || { BASE_REF=$saved_base_ref; fail "could not materialize historical tmux adapter from $old_tmux_ref"; }
-  BASE_REF=$saved_base_ref
+test_teardown_removes_with_wt_and_closes_the_window_exactly() {
+  local fb proj wt id state config data log out rc
   proj="$TMP_ROOT/teardown-project"; wt="$TMP_ROOT/teardown-wt"
   id="teardownconform1"
   fm_git_worktree "$proj" "$wt" "fm/$id"
@@ -1134,42 +1121,27 @@ test_teardown_conformance_old_vs_new() {
   data="$TMP_ROOT/teardown-data"
   mkdir -p "$data/$id"
   printf 'scout findings\n' > "$data/$id/report.md"
-
-  state_old="$TMP_ROOT/teardown-state-old"; state_new="$TMP_ROOT/teardown-state-new"
-  config_old="$TMP_ROOT/teardown-config-old"; config_new="$TMP_ROOT/teardown-config-new"
-  mkdir -p "$state_old" "$state_new" "$config_old" "$config_new"
-
-  fm_write_meta "$state_old/$id.meta" \
+  state="$TMP_ROOT/teardown-state"; config="$TMP_ROOT/teardown-config"
+  mkdir -p "$state" "$config"
+  fm_write_meta "$state/$id.meta" \
     "window=firstmate:fm-$id" "worktree=$wt" "project=$proj" "harness=claude" "kind=scout" "mode=no-mistakes" "yolo=off" \
     "decisions_reviewed=1" "decision_keys="
-  fm_write_meta "$state_new/$id.meta" \
-    "window=firstmate:fm-$id" "worktree=$wt" "project=$proj" "harness=claude" "kind=scout" "mode=no-mistakes" "yolo=off" \
-    "decisions_reviewed=1" "decision_keys="
-  touch "$state_old/.last-watcher-beat" "$state_new/.last-watcher-beat"
+  touch "$state/.last-watcher-beat"
 
-  log_old="$TMP_ROOT/teardown-old.log"; log_new="$TMP_ROOT/teardown-new.log"
-  out_old=$(run_teardown_case "$old_bin/bin/fm-teardown.sh" "$old_bin" "$fb" "$log_old" "$state_old" "$data" "$config_old" "$id" 2>&1)
-  rc_old=$?
-  out_new=$(run_teardown_case "$ROOT/bin/fm-teardown.sh" "$old_bin" "$fb" "$log_new" "$state_new" "$data" "$config_new" "$id" 2>&1)
-  rc_new=$?
-
-  expect_code 0 "$rc_old" "old fm-teardown.sh (scout, report present) should succeed"$'\n'"$out_old"
-  expect_code 0 "$rc_new" "new fm-teardown.sh (scout, report present) should succeed"$'\n'"$out_new"
-  assert_contains "$(cat "$log_new")" "treehouse"$'\x1f''return'$'\x1f''--force'$'\x1f'"$wt" \
-    "teardown did not call treehouse return --force <worktree>"
-  # The legacy fixture's adapter comes from BASE_REF, so its selector form is
-  # whatever the merge-base carried: permissive while the exact-selector change
-  # was still on a branch, exact for every branch cut after it landed on main.
-  # Pinning the old form here would make this case pass once and then fail
-  # forever, so the '=' exactness markers are normalized away and the legacy run
-  # is only required to have reached tmux window cleanup for this task. The
-  # exact-selector contract belongs to the current script, asserted below.
-  assert_contains "$(tr -d '=' < "$log_old")" "tmux"$'\x1f''kill-window'$'\x1f''-t'$'\x1f'"firstmate:fm-$id" \
-    "legacy teardown fixture did not exercise tmux window cleanup for the task"
-  assert_contains "$(cat "$log_new")" "tmux"$'\x1f''kill-window'$'\x1f''-t'$'\x1f'"=firstmate:=fm-$id" \
+  log="$TMP_ROOT/teardown.log"
+  : > "$log"
+  out=$(env PATH="$fb:$PATH" FM_ROOT_OVERRIDE="$ROOT" FM_STATE_OVERRIDE="$state" FM_DATA_OVERRIDE="$data" \
+    FM_CONFIG_OVERRIDE="$config" FM_TMUX_LOG="$log" "$ROOT/bin/fm-teardown.sh" "$id" 2>&1)
+  rc=$?
+  expect_code 0 "$rc" "fm-teardown.sh (scout, report present) should succeed"$'\n'"$out"
+  assert_contains "$(cat "$log")" "wt"$'\x1f''-C'$'\x1f'"$proj"$'\x1f''remove'$'\x1f'"$wt"$'\x1f''--foreground' \
+    "teardown did not call wt -C <project> remove <worktree> --foreground"
+  assert_not_contains "$(grep '^wt' "$log")" "--force" "teardown must never hand wt a force flag"
+  assert_not_contains "$(grep '^wt' "$log")" $'\x1f''-D' "teardown must never hand wt -D"
+  assert_contains "$(cat "$log")" "tmux"$'\x1f''kill-window'$'\x1f''-t'$'\x1f'"=firstmate:=fm-$id" \
     "teardown did not call tmux kill-window with exact session and window selectors"
 
-  pass "fm-teardown.sh: treehouse return remains compatible while tmux cleanup uses exact selectors"
+  pass "fm-teardown.sh: the worktree is removed with wt (never forced) and tmux cleanup uses exact selectors"
 }
 
 # --- backend selection loudly refuses an unknown backend --------------------
@@ -1310,7 +1282,7 @@ test_backend_of_selector_matches_explicit_target_meta
 test_send_tmux_contract
 test_peek_conformance_old_vs_new
 test_spawn_symlinked_project_prefix_avoids_false_refusal
-test_teardown_conformance_old_vs_new
+test_teardown_removes_with_wt_and_closes_the_window_exactly
 test_spawn_refuses_unknown_backend_flag
 test_spawn_refuses_codex_app_backend_flag
 test_spawn_refuses_unknown_fm_backend_env

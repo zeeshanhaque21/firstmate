@@ -806,15 +806,7 @@ fi
 exit 0
 SH
   chmod +x "$fakebin/gh"
-  cat > "$fakebin/treehouse" <<'SH'
-#!/usr/bin/env bash
-if [ "${1:-}" = get ] && [ "${2:-}" = --help ]; then
-  printf '%s\n' 'Usage: treehouse get [--lease] [--lease-holder <holder>]'
-  exit 0
-fi
-exit 0
-SH
-  chmod +x "$fakebin/treehouse"
+  fm_fake_version_tool "$fakebin" wt FM_FAKE_WT_VERSION 0.82.0
   printf 'FMX_PAIRING_TOKEN=tok-missing\n' > "$home/.env"
   out=$(PATH="$fakebin" FM_HOME="$home" FM_ROOT_OVERRIDE="$home" \
     "$BASH" "$ROOT/bin/fm-bootstrap.sh" 2>/dev/null)

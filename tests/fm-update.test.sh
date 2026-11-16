@@ -91,7 +91,7 @@ SH
 }
 
 # Add a secondmate home as a DETACHED worktree of the firstmate repo (matching
-# how treehouse leases a secondmate home), plus its state meta. Args: world id.
+# how wt creates a secondmate home), plus its state meta. Args: world id.
 # The recorded runtime matters to the action split, so it is part of the fixture:
 # harness defaults to a control-verified adapter on the default (tmux) backend,
 # which is what makes a restart provable. Pass a backend to model one that cannot

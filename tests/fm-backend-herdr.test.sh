@@ -27,7 +27,7 @@ herdr_forget_inherited_pane
 TMP_ROOT=$(fm_test_tmproot fm-backend-herdr-tests)
 # Pin the ambient-home default to a marker-free fixture: FM_HOME resolves to
 # the suite's own root when unset, and a secondmate-marked checkout (any
-# treehouse crew home carries .fm-secondmate-home) would flip the default
+# wt-created crew home carries .fm-secondmate-home) would flip the default
 # workspace label to 2ndmate-*, silently changing placement behavior for
 # every test that does not set FM_HOME itself. Per-test FM_HOME prefixes
 # still override this default.
@@ -423,7 +423,7 @@ test_recovery_grade_read_widens_only_at_its_own_boundary() {
 #
 # Herdr keeps a Pi registration (`agent get` -> agent=pi, agent_status=idle)
 # after the Pi process has exited to a plain shell whenever a nested interactive
-# shell sits under the pane's top shell (the `treehouse get` crew shape;
+# shell sits under the pane's top shell (the nested-shell crew shape;
 # reproduced on Herdr 0.9.0 - docs/verification/runtime-backends.md "Stale agent
 # registration"). Trusting that registration alone classified the pane `live`,
 # so every relaunch and recovery was refused forever. The classifier must now
@@ -3676,7 +3676,7 @@ test_current_path_reads_cwd() {
   dir="$TMP_ROOT/cwd"; mkdir -p "$dir/responses"; log="$dir/log"; resp="$dir/responses"; : > "$log"
   # Verified pitfall (herdr-verification-p2.md): .result.pane.cwd is frozen at
   # pane-creation time and never updates; .foreground_cwd tracks the live
-  # running process (e.g. a treehouse get subshell) and is what must be read.
+  # running process (e.g. a nested subshell) and is what must be read.
   printf '{"result":{"pane":{"cwd":"/tmp/pane-creation-dir","foreground_cwd":"/tmp/fake-worktree"}}}\n' > "$resp/1.out"
   fb=$(make_herdr_fakebin "$dir")
   out=$( PATH="$fb:$PATH" FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" \
@@ -4396,20 +4396,20 @@ test_send_text_submit_idle_native_pending_plus_rendered_busy_is_queued() {
 
 # The idle capture: no busy token anywhere, which is the pre-Enter baseline.
 herdr_cursor_idle_plain() {
-  printf '%b' ' ▄▄▄▄▄▄▄▄▄▄\n  → Add a follow-up\n ▀▀▀▀▀▀▀▀▀▀\n  Cursor Grok 4.5 High · 7%%           Run Everything\n  ~/.treehouse/curhd-ae68cd/1/curhd · 39418af\n'
+  printf '%b' ' ▄▄▄▄▄▄▄▄▄▄\n  → Add a follow-up\n ▀▀▀▀▀▀▀▀▀▀\n  Cursor Grok 4.5 High · 7%%           Run Everything\n  ~/repo-worktrees/curhd-ae68cd · 39418af\n'
 }
 
 # The mid-turn capture, plain: the spinner verb rotates, the `ctrl+c to stop`
 # token does not, which is why the token is what the matcher keys on.
 herdr_cursor_midturn_plain() {
-  printf '%b' ' ⠘⠆ Running  59 tokens\n ▄▄▄▄▄▄▄▄▄▄\n  → Add a follow-up                   ctrl+c to stop\n ▀▀▀▀▀▀▀▀▀▀\n  1 task\n  Cursor Grok 4.5 High · 7%%           Run Everything\n  ~/.treehouse/curhd-ae68cd/1/curhd · 39418af\n'
+  printf '%b' ' ⠘⠆ Running  59 tokens\n ▄▄▄▄▄▄▄▄▄▄\n  → Add a follow-up                   ctrl+c to stop\n ▀▀▀▀▀▀▀▀▀▀\n  1 task\n  Cursor Grok 4.5 High · 7%%           Run Everything\n  ~/repo-worktrees/curhd-ae68cd · 39418af\n'
 }
 
 # The same mid-turn rows as herdr renders them with styling: the glyph and the
 # placeholder tail are dim, the cell under the parked terminal cursor is
 # reverse video, and the busy token trails on the SAME row.
 herdr_cursor_midturn_ansi() {
-  printf '%b' ' \033[0m\033[38;2;21;21;21m▄▄▄▄▄▄▄▄▄▄\033[0m\r\n \033[0m\033[48;2;21;21;21m \033[0m\033[2m\033[48;2;21;21;21m→ \033[0m\033[7m\033[48;2;21;21;21mA\033[0m\033[2m\033[48;2;21;21;21mdd a follow-up\033[0m\033[48;2;21;21;21m                   \033[0m\033[2m\033[48;2;21;21;21mctrl+c to stop\033[0m\033[48;2;21;21;21m \033[0m\r\n \033[0m\033[38;2;21;21;21m▀▀▀▀▀▀▀▀▀▀\033[0m\r\n  \033[0m\033[38;5;4m1 task\033[0m\r\n  \033[0m\033[2mCursor Grok 4.5 High\033[0m \033[0m\033[2m·\033[0m \033[0m\033[2m7%%\033[0m           \033[0m\033[38;5;5mRun Everything\033[0m\r\n  \033[0m\033[2m~/.treehouse/curhd-ae68cd/1/curhd · 39418af\033[0m\r\n'
+  printf '%b' ' \033[0m\033[38;2;21;21;21m▄▄▄▄▄▄▄▄▄▄\033[0m\r\n \033[0m\033[48;2;21;21;21m \033[0m\033[2m\033[48;2;21;21;21m→ \033[0m\033[7m\033[48;2;21;21;21mA\033[0m\033[2m\033[48;2;21;21;21mdd a follow-up\033[0m\033[48;2;21;21;21m                   \033[0m\033[2m\033[48;2;21;21;21mctrl+c to stop\033[0m\033[48;2;21;21;21m \033[0m\r\n \033[0m\033[38;2;21;21;21m▀▀▀▀▀▀▀▀▀▀\033[0m\r\n  \033[0m\033[38;5;4m1 task\033[0m\r\n  \033[0m\033[2mCursor Grok 4.5 High\033[0m \033[0m\033[2m·\033[0m \033[0m\033[2m7%%\033[0m           \033[0m\033[38;5;5mRun Everything\033[0m\r\n  \033[0m\033[2m~/repo-worktrees/curhd-ae68cd · 39418af\033[0m\r\n'
 }
 
 # Non-vacuity anchor for the two submit tests below: the real mid-turn capture

@@ -105,8 +105,8 @@ case "$p" in
 esac
 pass "real cmux: current_path reads the surface's live cwd after a direct cd"
 
-# The load-bearing case: a NESTED SUBSHELL's own cd (exactly what `treehouse
-# get` does). Verified real finding (docs/cmux-backend.md finding #2):
+# The load-bearing case: a NESTED SUBSHELL's own cd (what a nested
+# interactive shell does). Verified real finding (docs/cmux-backend.md finding #2):
 # current_directory stays frozen at wherever the surface's shell was when it
 # launched the subshell as a foreground command - it never follows the
 # subshell's own cd. fm_backend_cmux_current_path's active pwd-probe is what
@@ -119,9 +119,9 @@ sleep 0.3
 p2=$(fm_backend_cmux_current_path "$TARGET") || fail "current_path failed inside a nested subshell"
 case "$p2" in
   */private/tmp|*/tmp) : ;;
-  *) fail "real cmux: current_path did not track a nested subshell's own cd (the treehouse-get-shaped case), got '$p2'" ;;
+  *) fail "real cmux: current_path did not track a nested subshell's own cd (the nested-shell-shaped case), got '$p2'" ;;
 esac
-pass "real cmux: current_path tracks a NESTED SUBSHELL's own cd (the treehouse-get-shaped case a bare cwd read cannot see)"
+pass "real cmux: current_path tracks a NESTED SUBSHELL's own cd (the nested-shell-shaped case a bare cwd read cannot see)"
 fm_backend_cmux_send_text_line "$TARGET" 'exit'
 sleep 0.3
 

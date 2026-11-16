@@ -343,7 +343,7 @@ set -e
 [ "$rc" -ne 0 ] || fail "the remote doctor passed with a missing required tool"
 assert_contains "$out" 'required herdr=MISSING' "the remote doctor did not mark a missing required tool"
 assert_contains "$out" 'required tasks-axi=MISSING' "the remote doctor did not mark every missing required tool"
-assert_contains "$out" 'required tools do not resolve on the remote runtime PATH: herdr tasks-axi treehouse harness' "the remote doctor did not name the missing tools"
+assert_contains "$out" 'required tools do not resolve on the remote runtime PATH: herdr tasks-axi wt harness' "the remote doctor did not name the missing tools"
 assert_contains "$out" '.local/bin' "the remote doctor did not offer the wrapper escape hatch"
 ln -sf "$(command -v git)" "$DOCTOR_BIN/git"
 # The direct doctor fixture needs the complete required tool set. These stubs
@@ -359,9 +359,9 @@ case "${1:-}:${2:-}" in
   mv:--help) printf '%s\n' 'usage: tasks-axi mv <id> [<id>...]' ;;
 esac
 SH
-printf '#!/usr/bin/env bash\nexit 0\n' > "$DOCTOR_BIN/treehouse"
+printf '#!/usr/bin/env bash\nexit 0\n' > "$DOCTOR_BIN/wt"
 printf '#!/usr/bin/env bash\nexit 0\n' > "$DOCTOR_BIN/claude"
-chmod +x "$DOCTOR_BIN/jq" "$DOCTOR_BIN/herdr" "$DOCTOR_BIN/tasks-axi" "$DOCTOR_BIN/treehouse" "$DOCTOR_BIN/claude"
+chmod +x "$DOCTOR_BIN/jq" "$DOCTOR_BIN/herdr" "$DOCTOR_BIN/tasks-axi" "$DOCTOR_BIN/wt" "$DOCTOR_BIN/claude"
 set +e
 out=$(HOME="$DOCTOR_HOME" PATH="$DOCTOR_BIN:/usr/bin:/bin:/usr/sbin:/sbin" "$ROOT/bin/fm-remote-doctor.sh" 2>&1)
 rc=$?
@@ -375,7 +375,7 @@ else
 fi
 assert_contains "$out" "required herdr=$DOCTOR_BIN/herdr" "the remote doctor did not require herdr"
 assert_contains "$out" "required tasks-axi=$DOCTOR_BIN/tasks-axi" "the remote doctor did not require compatible tasks-axi"
-assert_contains "$out" "required treehouse=$DOCTOR_BIN/treehouse" "the remote doctor did not require treehouse"
+assert_contains "$out" "required wt=$DOCTOR_BIN/wt" "the remote doctor did not require wt"
 assert_contains "$out" "required harness=claude:$DOCTOR_BIN/claude" "the remote doctor did not require a verified harness"
 assert_not_contains "$out" 'required tools do not resolve' "a resolved required tool was still reported missing"
 pass "the remote doctor reports its required runtime tool set and optional tools"

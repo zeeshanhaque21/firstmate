@@ -184,7 +184,8 @@ test_remote_probe_scheduling_keeps_per_mate_lines() { # <parallel|fallback>
   git -C "$primary" add AGENTS.md bin
   git -C "$primary" commit -qm 'seed primary default branch'
   fakebin=$(fm_fakebin "$dir")
-  fm_fake_exit0 "$fakebin" gh treehouse tmux node
+  fm_fake_exit0 "$fakebin" gh tmux node
+  fm_fake_version_tool "$fakebin" wt FM_FAKE_WT_VERSION 0.82.0
   log="$dir/probe.log"
   : > "$log"
   install_fake_ssh "$fakebin"
@@ -234,7 +235,6 @@ SH
     FM_FAKE_SSH_DIRTY_HOST=host-charlie \
     FM_FAKE_GIT_FETCH_SLEEP=0.4 \
     FM_INHERITABLE_CONFIG='' \
-    FM_FAKE_TREEHOUSE_LEASE_HELP=1 \
     "$ROOT/bin/fm-bootstrap.sh" 2>&1
   )
 

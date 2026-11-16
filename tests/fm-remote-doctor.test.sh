@@ -278,7 +278,7 @@ case "${1:-}:${2:-}" in
   mv:--help) printf '%s\n' 'usage: tasks-axi mv <id> [<id>...]' ;;
 esac
 SH
-  cat > "$CASE_BIN/treehouse" <<'SH'
+  cat > "$CASE_BIN/wt" <<'SH'
 #!/usr/bin/env bash
 exit 0
 SH
@@ -286,7 +286,7 @@ SH
 #!/usr/bin/env bash
 exit 0
 SH
-  chmod +x "$CASE_BIN/uname" "$CASE_BIN/launchctl" "$CASE_BIN/dscl" "$CASE_BIN/tasks-axi" "$CASE_BIN/treehouse" "$CASE_BIN/claude"
+  chmod +x "$CASE_BIN/uname" "$CASE_BIN/launchctl" "$CASE_BIN/dscl" "$CASE_BIN/tasks-axi" "$CASE_BIN/wt" "$CASE_BIN/claude"
   cat > "$CASE_BIN/sleep" <<'SH'
 #!/usr/bin/env bash
 exit 0
@@ -811,14 +811,14 @@ expect_code 0 "$DOCTOR_RC" "--fix did not wrap one discoverable harness when non
 assert_present "$CASE_HOME/.local/bin/codex" "--fix did not create the first needed harness wrapper"
 assert_absent "$CASE_HOME/.local/bin/grok" "--fix created more harness wrappers than readiness requires"
 
-mv "$CASE_BIN/treehouse" "$MANAGER_BIN/treehouse"
+mv "$CASE_BIN/wt" "$MANAGER_BIN/wt"
 mkdir -p "$CASE_HOME/.local/bin"
-printf 'operator wrapper\n' > "$CASE_HOME/.local/bin/treehouse"
+printf 'operator wrapper\n' > "$CASE_HOME/.local/bin/wt"
 doctor --fix
 expect_code 1 "$DOCTOR_RC" "--fix overwrote an operator-owned reserved wrapper"
-assert_contains "$DOCTOR_OUT" 'fix required-treehouse=failed:' \
+assert_contains "$DOCTOR_OUT" 'fix required-wt=failed:' \
   "the non-Firstmate wrapper refusal was not reported"
-[ "$(cat "$CASE_HOME/.local/bin/treehouse")" = 'operator wrapper' ] \
+[ "$(cat "$CASE_HOME/.local/bin/wt")" = 'operator wrapper' ] \
   || fail "--fix overwrote an operator-owned wrapper"
 pass "--fix creates only owned version-manager wrappers and never clobbers an operator file"
 
@@ -827,7 +827,7 @@ CASE_REMOTE_JOB_ACTIVE=
 CASE_PLATFORM_OVERRIDE=Linux
 rm -f "$CASE_BIN/sleep" "$CASE_BIN/uname"
 mkdir -p "$CASE_HOME/.local/bin"
-for tool in herdr tasks-axi treehouse claude; do
+for tool in herdr tasks-axi wt claude; do
   ln -s "$CASE_BIN/$tool" "$CASE_HOME/.local/bin/$tool"
 done
 HOME="$CASE_HOME" FM_ROOT_OVERRIDE="$ROOT" FM_REMOTE_JOB_PLATFORM_OVERRIDE=Linux \

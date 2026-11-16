@@ -39,7 +39,7 @@ assert_contains_local() {  # <haystack> <needle> <msg>
 
 command -v herdr >/dev/null 2>&1 || { echo "skip: herdr not found"; exit 0; }
 command -v jq >/dev/null 2>&1 || { echo "skip: jq not found (required by the herdr adapter)"; exit 0; }
-command -v treehouse >/dev/null 2>&1 || { echo "skip: treehouse not found (required by fm-spawn.sh)"; exit 0; }
+command -v wt >/dev/null 2>&1 || { echo "skip: wt (Worktrunk) not found (required by fm-spawn.sh)"; exit 0; }
 
 export FM_GATE_REFUSE_BYPASS=1
 
@@ -59,6 +59,7 @@ herdr_forget_inherited_pane
 # The dedicated regression is
 # tests/fm-backend.test.sh:test_spawn_symlinked_project_prefix_avoids_false_refusal.
 TMP_ROOT=$(mktemp -d "$(cd "${TMPDIR:-/tmp}" && pwd -P)/fm-backend-autodetect-smoke.XXXXXX")
+export XDG_CONFIG_HOME="$TMP_ROOT/xdg-config"  # wt must never read the operator's own config or hooks
 HERDR_LAB_HELPER="$ROOT/bin/fm-herdr-lab.sh"
 HERDR_LAB_SESSION=$("$HERDR_LAB_HELPER" name fm-autodetect-smoke-concurrency-h3) || {
   rm -rf "$TMP_ROOT"
@@ -69,7 +70,8 @@ ID="autodetectsmoke1"
 WT=
 cleanup_all() {
   local cleanup_status=0
-  [ -n "$WT" ] && command -v treehouse >/dev/null 2>&1 && treehouse return --force "$WT" >/dev/null 2>&1
+  # The worktree wt created sits beside the scratch project, inside TMP_ROOT, and
+  # goes with it below; nothing here touches a real repository.
   "$HERDR_LAB_HELPER" teardown "$HERDR_LAB_SESSION" || cleanup_status=$?
   rm -rf "$TMP_ROOT"
   return "$cleanup_status"

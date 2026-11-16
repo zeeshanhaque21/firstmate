@@ -42,7 +42,7 @@ TMP_ROOT=$(mktemp -d "${TMPDIR:-/tmp}/fm-gotmp-tests.XXXXXX")
 
 # Build a fake FM_HOME/FM_ROOT so the real fm-teardown.sh (symlinked in) resolves
 # state and helper scripts inside it. Stub the helper scripts fm-teardown calls so no
-# live tmux/treehouse/fleet state is touched. A nonexistent worktree path makes both
+# live tmux/wt/fleet state is touched. A nonexistent worktree path makes both
 # `if [ -d "$WT" ]` guards skip, so teardown runs straight to the cleanup + state rm.
 make_fake_root() {
   local id=$1 tasktmp=$2
@@ -115,7 +115,7 @@ fm_tasks_axi_compatible() { return 1; }
 fm_backlog_backend_manual() { return 1; }
 SH
   ln -s "$ROOT/bin/fm-backlog-transition-lib.sh" "$fake/bin/fm-backlog-transition-lib.sh"
-  # Meta with a nonexistent worktree so the dirty/treehouse blocks skip.
+  # Meta with a nonexistent worktree so the dirty-worktree and removal blocks skip.
   cat > "$fake/state/$id.meta" <<META
 window=fakeses:fm-$id
 worktree=$TMP_ROOT/nonexistent-worktree-$id

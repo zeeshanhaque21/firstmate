@@ -140,8 +140,8 @@ p_wrap=$(fm_backend_zellij_current_path "$TARGET") || fail "current_path failed 
 [ "$p_wrap" = "$LONG_CWD" ] || fail "real zellij: current_path did not reconstruct a long wrapped cwd, got '$p_wrap'"
 pass "real zellij: current_path reconstructs a long cwd that can wrap in the terminal"
 
-# The load-bearing case: a NESTED SUBSHELL's own cd (exactly what `treehouse
-# get` does). Verified real bug: zellij's `pane_cwd` JSON field stays frozen
+# The load-bearing case: a NESTED SUBSHELL's own cd (what a nested
+# interactive shell does). Verified real bug: zellij's `pane_cwd` JSON field stays frozen
 # at wherever the pane's shell was when it launched the subshell as a
 # foreground command - it never follows the subshell's own cd, even once
 # that subshell is fully interactive. fm_backend_zellij_current_path's active
@@ -153,8 +153,8 @@ sleep 0.5
 fm_backend_zellij_send_text_line "$TARGET" "cd $TMP_CWD_Q"
 sleep 0.3
 p2=$(fm_backend_zellij_current_path "$TARGET") || fail "current_path failed inside a nested subshell"
-[ "$p2" = "$TMP_CWD" ] || fail "real zellij: current_path did not track a nested subshell's own cd (the treehouse-get-shaped case), got '$p2'"
-pass "real zellij: current_path tracks a NESTED SUBSHELL's own cd (the treehouse-get-shaped case a bare pane_cwd read cannot see)"
+[ "$p2" = "$TMP_CWD" ] || fail "real zellij: current_path did not track a nested subshell's own cd (the nested-shell-shaped case), got '$p2'"
+pass "real zellij: current_path tracks a NESTED SUBSHELL's own cd (the nested-shell-shaped case a bare pane_cwd read cannot see)"
 fm_backend_zellij_send_text_line "$TARGET" 'exit'
 sleep 0.3
 

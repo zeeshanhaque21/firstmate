@@ -95,7 +95,8 @@ case "${1:-}" in display-message) printf 'firstmate\n'; exit 0 ;; esac
 exit 0
 SH
   chmod +x "$fakebin/tmux"
-  fm_fake_exit0 "$fakebin" treehouse gh gh-axi no-mistakes
+  fm_fake_exit0 "$fakebin" gh gh-axi no-mistakes
+  fm_fake_wt_fixed "$fakebin"
 
   fm_git_init_commit "$case_dir/project"
   fm_git_add_origin "$case_dir/project" "$case_dir/project.origin.git"
@@ -452,6 +453,18 @@ SH
   chmod +x "$case_dir/fakebin/tmux"
 }
 
+# A wt that records any request to create a worktree (and answers like the fixed
+# stub), so a refusal case can prove no local copy was requested before it.
+record_worktree_requests() {  # <case-dir>
+  local case_dir=$1
+  cat > "$case_dir/fakebin/wt" <<SH
+#!/usr/bin/env bash
+case " \$* " in *" switch "*) : > "$case_dir/local-copy-requested" ;; esac
+exit 0
+SH
+  chmod +x "$case_dir/fakebin/wt"
+}
+
 track_teardown_resource_actions() {  # <case-dir>
   local case_dir=$1
   cat > "$case_dir/fakebin/tmux" <<SH
@@ -459,19 +472,20 @@ track_teardown_resource_actions() {  # <case-dir>
 : > "$case_dir/backend-resource-action"
 exit 0
 SH
-  cat > "$case_dir/fakebin/treehouse" <<SH
+  cat > "$case_dir/fakebin/wt" <<SH
 #!/usr/bin/env bash
 : > "$case_dir/local-copy-resource-action"
 exit 0
 SH
-  chmod +x "$case_dir/fakebin/tmux" "$case_dir/fakebin/treehouse"
+  chmod +x "$case_dir/fakebin/tmux" "$case_dir/fakebin/wt"
 }
 
-interrupt_teardown_during_treehouse_return() {  # <case-dir>
+interrupt_teardown_during_worktree_removal() {  # <case-dir>
   local case_dir=$1
-  cat > "$case_dir/fakebin/treehouse" <<SH
+  cat > "$case_dir/fakebin/wt" <<SH
 #!/usr/bin/env bash
-if [ "\${1:-}" = return ] && [ ! -f "$case_dir/teardown-interrupted" ]; then
+case " \$* " in *" remove "*) removing=1 ;; *) removing=0 ;; esac
+if [ "\$removing" = 1 ] && [ ! -f "$case_dir/teardown-interrupted" ]; then
   : > "$case_dir/teardown-interrupted"
   teardown_pid=\$(ps -o ppid= -p "\$PPID" | tr -d ' ')
   case "\$teardown_pid" in ''|*[!0-9]*) exit 1 ;; esac
@@ -480,7 +494,7 @@ if [ "\${1:-}" = return ] && [ ! -f "$case_dir/teardown-interrupted" ]; then
 fi
 exit 0
 SH
-  chmod +x "$case_dir/fakebin/treehouse"
+  chmod +x "$case_dir/fakebin/wt"
 }
 
 interrupt_kimi_readiness() {  # <case-dir>
@@ -598,7 +612,7 @@ run_spawn() {  # <case-dir> <args...>
   # without it this suite would write the developer's real ~/.claude.json.
   mkdir -p "$case_dir/user-home"
   FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$(home_of "$case_dir")" HOME="$case_dir/user-home" \
-    FM_SPAWN_NO_GUARD=1 FM_FAKE_PANE_PATH="$case_dir/wt" TMUX="fake,1,0" \
+    FM_SPAWN_NO_GUARD=1 FM_FAKE_PANE_PATH="$case_dir/wt" FM_FAKE_WT_PATH="$case_dir/wt" TMUX="fake,1,0" \
     CLAUDE_CONFIG_DIR='' \
     PATH="$case_dir/fakebin:$PATH" \
     "$SPAWN" "$@" 2>&1
@@ -910,13 +924,13 @@ test_dispatch_refuses_a_pending_authoritative_close() {
 #!/usr/bin/env bash
 case "\$*" in
   *new-window*) : > "$case_dir/task-endpoint-created" ;;
-  *treehouse\\ get*) : > "$case_dir/local-copy-requested" ;;
   *"#{pane_current_path}"*) printf '%s\n' "\${FM_FAKE_PANE_PATH:-}"; exit 0 ;;
 esac
 case "\${1:-}" in display-message) printf 'firstmate\n'; exit 0 ;; esac
 exit 0
 SH
   chmod +x "$case_dir/fakebin/tmux"
+  record_worktree_requests "$case_dir"
 
   out=$(run_ship_spawn "$case_dir" "$id") || rc=$?
   [ "$rc" -ne 0 ] || fail "spawn accepted work with an authoritative close still pending"
@@ -945,13 +959,13 @@ test_dispatch_refuses_a_held_row_before_creating_resources() {
 #!/usr/bin/env bash
 case "\$*" in
   *new-window*) : > "$case_dir/task-endpoint-created" ;;
-  *treehouse\\ get*) : > "$case_dir/local-copy-requested" ;;
   *"#{pane_current_path}"*) printf '%s\n' "\${FM_FAKE_PANE_PATH:-}"; exit 0 ;;
 esac
 case "\${1:-}" in display-message) printf 'firstmate\n'; exit 0 ;; esac
 exit 0
 SH
   chmod +x "$case_dir/fakebin/tmux"
+  record_worktree_requests "$case_dir"
 
   out=$(run_ship_spawn "$case_dir" "$id") || rc=$?
   [ "$rc" -ne 0 ] || fail "spawn accepted a held backlog row"
@@ -980,13 +994,13 @@ test_dispatch_refuses_a_blocked_row_before_creating_resources() {
 #!/usr/bin/env bash
 case "\$*" in
   *new-window*) : > "$case_dir/task-endpoint-created" ;;
-  *treehouse\\ get*) : > "$case_dir/local-copy-requested" ;;
   *"#{pane_current_path}"*) printf '%s\n' "\${FM_FAKE_PANE_PATH:-}"; exit 0 ;;
 esac
 case "\${1:-}" in display-message) printf 'firstmate\n'; exit 0 ;; esac
 exit 0
 SH
   chmod +x "$case_dir/fakebin/tmux"
+  record_worktree_requests "$case_dir"
 
   out=$(run_ship_spawn "$case_dir" "$id") || rc=$?
   [ "$rc" -ne 0 ] || fail "spawn accepted a dependency-blocked backlog row"
@@ -1015,13 +1029,13 @@ test_dispatch_refuses_a_held_in_flight_row_before_relaunch() {
 #!/usr/bin/env bash
 case "\$*" in
   *new-window*) : > "$case_dir/task-endpoint-created" ;;
-  *treehouse\\ get*) : > "$case_dir/local-copy-requested" ;;
   *"#{pane_current_path}"*) printf '%s\n' "\${FM_FAKE_PANE_PATH:-}"; exit 0 ;;
 esac
 case "\${1:-}" in display-message) printf 'firstmate\n'; exit 0 ;; esac
 exit 0
 SH
   chmod +x "$case_dir/fakebin/tmux"
+  record_worktree_requests "$case_dir"
 
   out=$(run_ship_spawn "$case_dir" "$id") || rc=$?
   [ "$rc" -ne 0 ] || fail "spawn accepted a held In-flight backlog row"
@@ -1480,7 +1494,7 @@ test_deferred_signal_verification_outlives_an_unresponsive_tasks_axi() {
   mkdir -p "$case_dir/user-home"
   out=$(FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$(home_of "$case_dir")" \
     HOME="$case_dir/user-home" FM_SPAWN_NO_GUARD=1 \
-    FM_FAKE_PANE_PATH="$case_dir/wt" TMUX="fake,1,0" CLAUDE_CONFIG_DIR='' \
+    FM_FAKE_PANE_PATH="$case_dir/wt" FM_FAKE_WT_PATH="$case_dir/wt" TMUX="fake,1,0" CLAUDE_CONFIG_DIR='' \
     FM_TASKS_AXI_TIMEOUT=3 PATH="$case_dir/fakebin:$PATH" \
     timeout -k 5 30 "$SPAWN" "$id" "$case_dir/project" \
     --mode no-mistakes --yolo off 2>&1) || rc=$?
@@ -1814,7 +1828,7 @@ test_interrupted_destructive_cleanup_leaves_a_recoverable_close() {
   add_item "$case_dir" "$id"
   out=$(run_ship_spawn "$case_dir" "$id") || fail "spawn failed: $out"
   marker="$home/state/$id.backlog-close"
-  interrupt_teardown_during_treehouse_return "$case_dir"
+  interrupt_teardown_during_worktree_removal "$case_dir"
 
   out=$(run_teardown "$case_dir" "$id") || rc=$?
   [ "$rc" -ne 0 ] || fail "interrupted destructive cleanup reported success"
@@ -2776,7 +2790,7 @@ test_spawn_refuses_a_special_file_tasks_config() {
   mkfifo "$home/.tasks.toml"
 
   out=$(FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$home" \
-    FM_SPAWN_NO_GUARD=1 FM_FAKE_PANE_PATH="$case_dir/wt" TMUX="fake,1,0" \
+    FM_SPAWN_NO_GUARD=1 FM_FAKE_PANE_PATH="$case_dir/wt" FM_FAKE_WT_PATH="$case_dir/wt" TMUX="fake,1,0" \
     CLAUDE_CONFIG_DIR='' \
     PATH="$case_dir/fakebin:$PATH" \
     timeout 60 "$SPAWN" "$id" "$case_dir/project" --mode no-mistakes --yolo off 2>&1) || rc=$?

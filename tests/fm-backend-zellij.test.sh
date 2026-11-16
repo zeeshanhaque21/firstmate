@@ -697,7 +697,7 @@ test_current_path_probes_with_marker_and_ignores_prompt_paths() {
   local dir fb out
   # Verified real-zellij pitfall (docs/zellij-backend.md "Worktree-path
   # discovery: pane_cwd does not track a subshell"): pane_cwd never updates
-  # once a subshell (e.g. treehouse get) takes over, so current_path actively
+  # once a subshell (e.g. a nested shell) takes over, so current_path actively
   # prints a marked cwd line and reads only that marker from the capture,
   # rather than reading a JSON field.
   dir="$TMP_ROOT/cwd"; mkdir -p "$dir/responses"
@@ -708,16 +708,16 @@ test_current_path_probes_with_marker_and_ignores_prompt_paths() {
   printf '%s\n' 'scratch-e2e-project HEAD' \
     '/home/fixture/src/project ❯ printf marker' \
     '__FM_ZELLIJ_CWD_BEGIN__' \
-    '/home/fixture/.treehouse/fake-' \
+    '/home/fixture/repo-worktrees/fake-' \
     'worktree' \
     '__FM_ZELLIJ_CWD_END__' \
-    '/home/fixture/.treehouse/fake-worktree ❯' \
+    '/home/fixture/repo-worktrees/fake-worktree ❯' \
     > "$dir/responses/7.out"
   fb=$(make_zellij_fakebin "$dir")
   out=$( PATH="$fb:$PATH" FM_ZELLIJ_LOG="$dir/log" FM_ZELLIJ_RESPONSES="$dir/responses" \
     FM_ZELLIJ_SESSION_LIST="firstmate" \
     bash -c '. "$0/bin/backends/zellij.sh"; fm_backend_zellij_current_path firstmate:7' "$ROOT" )
-  [ "$out" = "/home/fixture/.treehouse/fake-worktree" ] || fail "current_path should read only the marked cwd line, got '$out'"
+  [ "$out" = "/home/fixture/repo-worktrees/fake-worktree" ] || fail "current_path should read only the marked cwd line, got '$out'"
   zellij_assert_call_order "$dir/log" $'\x1f''list-panes'$'\x1f''--json' $'\x1f''paste' \
     "current_path did not verify the pane before the cwd probe paste"
   zellij_assert_call_order "$dir/log" $'\x1f''list-panes'$'\x1f''--json' $'\x1f''dump-screen' \
@@ -736,14 +736,14 @@ test_current_path_ignores_tilde_prefixed_banner_lines() {
   zellij_pane_response "$dir" 2 7 3
   zellij_pane_response "$dir" 4 7 3
   zellij_pane_response "$dir" 6 7 3
-  printf '%s\n' "🌳 Entered worktree at ~/.treehouse/scratch-e2e-project/1. Type 'exit' to return." \
-    'scratch-e2e-project HEAD' '__FM_ZELLIJ_CWD_BEGIN__' '/home/fixture/.treehouse/real-worktree' '__FM_ZELLIJ_CWD_END__' '❯' \
+  printf '%s\n' "🌳 Entered worktree at ~/scratch-e2e-project-worktrees/fm-1. Type 'exit' to return." \
+    'scratch-e2e-project HEAD' '__FM_ZELLIJ_CWD_BEGIN__' '/home/fixture/repo-worktrees/real-worktree' '__FM_ZELLIJ_CWD_END__' '❯' \
     > "$dir/responses/7.out"
   fb=$(make_zellij_fakebin "$dir")
   out=$( PATH="$fb:$PATH" FM_ZELLIJ_LOG="$dir/log" FM_ZELLIJ_RESPONSES="$dir/responses" \
     FM_ZELLIJ_SESSION_LIST="firstmate" \
     bash -c '. "$0/bin/backends/zellij.sh"; fm_backend_zellij_current_path firstmate:7' "$ROOT" )
-  [ "$out" = "/home/fixture/.treehouse/real-worktree" ] || fail "current_path should skip the ~-prefixed banner line and read the marked cwd output, got '$out'"
+  [ "$out" = "/home/fixture/repo-worktrees/real-worktree" ] || fail "current_path should skip the ~-prefixed banner line and read the marked cwd output, got '$out'"
   pass "fm_backend_zellij_current_path: never picks up a ~-prefixed banner line as the answer"
 }
 

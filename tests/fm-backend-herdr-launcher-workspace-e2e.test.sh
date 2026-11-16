@@ -37,7 +37,7 @@ assert_contains_local() {  # <haystack> <needle> <msg>
 
 command -v herdr >/dev/null 2>&1 || { echo "skip: herdr not found"; exit 0; }
 command -v jq >/dev/null 2>&1 || { echo "skip: jq not found (required by the herdr adapter)"; exit 0; }
-command -v treehouse >/dev/null 2>&1 || { echo "skip: treehouse not found (required by fm-spawn.sh)"; exit 0; }
+command -v wt >/dev/null 2>&1 || { echo "skip: wt (Worktrunk) not found (required by fm-spawn.sh)"; exit 0; }
 
 # shellcheck source=tests/herdr-test-safety.sh
 . "$ROOT/tests/herdr-test-safety.sh"
@@ -47,6 +47,7 @@ command -v treehouse >/dev/null 2>&1 || { echo "skip: treehouse not found (requi
 herdr_forget_inherited_pane
 
 TMP_ROOT=$(mktemp -d "$(cd "${TMPDIR:-/tmp}" && pwd -P)/fm-herdr-launcher-e2e.XXXXXX")
+export XDG_CONFIG_HOME="$TMP_ROOT/xdg-config"  # wt must never read the operator's own config or hooks
 HERDR_LAB_HELPER="$ROOT/bin/fm-herdr-lab.sh"
 HERDR_LAB_SESSION=$("$HERDR_LAB_HELPER" name fm-herdr-launcher-ws) || {
   rm -rf "$TMP_ROOT"
@@ -61,12 +62,11 @@ CLEANED=0
 # so a second teardown would otherwise report the already-consumed fleet-state
 # tripwire as if the lab had gone wrong.
 cleanup_all() {
-  local wt status=0
+  local status=0
   [ "$CLEANED" = 0 ] || return 0
   CLEANED=1
-  for wt in ${WORKTREES[@]+"${WORKTREES[@]}"}; do
-    [ -n "$wt" ] && treehouse return --force "$wt" >/dev/null 2>&1
-  done
+  # The worktrees wt created sit beside their scratch projects, inside TMP_ROOT,
+  # and go with it below; nothing here touches a real repository.
   WORKTREES=()
   "$HERDR_LAB_HELPER" teardown "$HERDR_LAB_SESSION" || status=$?
   rm -rf "$TMP_ROOT"
