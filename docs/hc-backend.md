@@ -117,8 +117,6 @@ Capture, current path, and composer reads stay label-optional because they chang
   When that process is a launcher, the adapter also reads the rest of its process group from `ps`, which works only for terminals on the local machine.
 - Agent state is `missing` only for a structured not-found or for a finished terminal that carries the expected labels.
   A present terminal that does not carry them (the label defaults to any task label of this home) is `ambiguous`, never `dead` or `missing`, so an address that now names someone else's terminal cannot license a relaunch.
-- A shell foreground whose process group cannot be read, because the leader vanished or `ps` failed, is `ambiguous`, not `dead`.
-  A zombie in that group runs nothing and never counts as an agent.
 - An aborted spawn closes the terminal it created, through the same guarded close, while no task record exists and the terminal still carries the task's labels, so the retry is not refused as a duplicate.
   Once the record is published the record owns the terminal and an abort leaves it for teardown and recovery.
 - Right after a terminal starts, `hc get` can report no foreground process yet, and agent state reads `unreadable` until the shell is up.

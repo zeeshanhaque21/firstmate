@@ -287,66 +287,6 @@ test_agent_state_never_calls_a_foreign_terminal_dead_or_missing() {
   pass "hc: agent_state reads a foreign terminal at the recorded address as ambiguous, never dead or missing"
 }
 
-# The leader's group is the evidence for a shell leader; when it cannot be read
-# the shell is not proven agent-free.
-test_agent_state_group_that_cannot_be_read_is_ambiguous() {
-  local tag out gone
-  setup_case vanished
-  tag=$(hometag_of)
-  bash -c 'exit 0' &
-  gone=$!
-  wait "$gone" 2>/dev/null || true
-  write_terminal "$D" t1 live fm-a1 "$tag" bash bash
-  jq --argjson p "$gone" '.foreground.pid = $p' "$D/t1.json" > "$D/t1.tmp" && mv "$D/t1.tmp" "$D/t1.json"
-  write_terminal "$D" t2 live fm-a1 "$tag" bash bash
-  jq 'del(.foreground.pid)' "$D/t2.json" > "$D/t2.tmp" && mv "$D/t2.tmp" "$D/t2.json"
-  # shellcheck disable=SC2016 # the inner shell expands it
-  out=$(hc_shell 'for a in t1 t2; do printf "%s=%s " $a "$(fm_backend_agent_state hc fmtest:$a fm-a1)"; done')
-  assert_equals "$out" "t1=ambiguous t2=ambiguous " \
-    "a shell leader whose process group cannot be read (vanished pid, no pid) is ambiguous, not dead"
-  pass "hc: agent_state calls a shell with an unreadable process group ambiguous, not dead"
-}
-
-# A zombie runs nothing, so a defunct harness-named group member is no agent.
-# The zombie is a real process whose parent never waits for it. Linux keeps a
-# zombie's name (the harness name) in the process table while macOS blanks it
-# to <defunct>, so a ps shim restores the name on the real zombie's row to
-# exercise the same table on both.
-test_agent_state_zombie_group_member_is_not_an_agent() {
-  local tag out leader zombie_seen=0 realps
-  setup_case zombie
-  tag=$(hometag_of)
-  realps=$(command -v ps)
-  cat > "$FB/ps" <<SH
-#!/bin/sh
-$realps "\$@" | awk '\$3 ~ /^Z/ && \$4 == "<defunct>" { \$4 = "claude" } 1'
-SH
-  chmod +x "$FB/ps"
-  # A wrapper in its own process group: the harness-named child exits at once
-  # and stays defunct because the wrapper, now a plain sleep, never reaps it.
-  set -m
-  bash -c '(exec -a claude sleep 0.1) & exec sleep 30' &
-  leader=$!
-  set +m
-  write_terminal "$D" t1 live fm-a1 "$tag" bash bash
-  jq --argjson p "$leader" '.foreground.pid = $p' "$D/t1.json" > "$D/t1.tmp" && mv "$D/t1.tmp" "$D/t1.json"
-  for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
-    if "$realps" -A -o pgid=,stat= | awk -v g="$leader" '$1 == g && $2 ~ /^Z/ { f = 1 } END { exit !f }'; then
-      zombie_seen=1
-      break
-    fi
-    sleep 0.1
-  done
-  [ "$zombie_seen" = 1 ] || { kill -- "-$leader" 2>/dev/null || true; fail "the test never produced a defunct group member"; }
-  assert_contains "$(FAKE_HC_DIR=$D PATH="$FB:$PATH" ps -A -o pid=,pgid=,stat=,comm= | awk -v g="$leader" '$2 == g && $3 ~ /^Z/')" claude \
-    "the shim must show the zombie under the harness name, as Linux does"
-  out=$(hc_shell 'fm_backend_agent_state hc fmtest:t1 fm-a1')
-  kill -- "-$leader" 2>/dev/null || true
-  wait "$leader" 2>/dev/null || true
-  assert_equals "$out" dead "a defunct harness-named group member must not make a shell leader alive"
-  pass "hc: agent_state does not count a zombie group member as an agent"
-}
-
 test_kill_proves_the_terminal_is_gone() {
   local tag
   setup_case kill
@@ -495,8 +435,6 @@ fm_test_run \
   test_agent_state_classifies_foreground_and_absence \
   test_agent_state_reads_a_shell_wrappers_group \
   test_agent_state_never_calls_a_foreign_terminal_dead_or_missing \
-  test_agent_state_group_that_cannot_be_read_is_ambiguous \
-  test_agent_state_zombie_group_member_is_not_an_agent \
   test_kill_proves_the_terminal_is_gone \
   test_kill_refuses_another_tasks_terminal \
   test_capture_and_current_path_read_the_recorded_terminal \

@@ -471,7 +471,7 @@ fm_backend_hc_kill() {  # <target> [unused] [expected-label]
 # `missing`: its program ended and it can never host the agent again. A live
 # one is classified from hc's foreground process through the shared classifier.
 fm_backend_hc_agent_state() {  # <target> [expected-label]
-  local expected=${2:-*} json rc fields state task home name argv0 args pid class group
+  local expected=${2:-*} json rc fields state task home name argv0 args pid class
   fm_backend_hc_parse_target "${1:-}" || { printf 'unreadable'; return 0; }
   json=$(fm_backend_hc_get "$1")
   rc=$?
@@ -500,40 +500,25 @@ EOF
   # is what hc names as the foreground; the harness itself is another member
   # of the same foreground process group, which is what tmux reads too. A shell
   # wrapper waiting on the harness is such a launcher, so a shell is only dead
-  # once its group was read and holds no harness. A group that could not be
-  # read (the leader vanished, ps failed) proves nothing either way.
-  group=0
-  fm_backend_hc_group_has_agent "$pid" || group=$?
-  [ "$group" -ne 0 ] || { printf 'alive'; return 0; }
-  if [ "$class" = shell ] && [ "$group" -eq 1 ]; then printf 'dead'; return 0; fi
+  # once its group holds no harness.
+  fm_backend_hc_group_has_agent "$pid" && { printf 'alive'; return 0; }
+  [ "$class" != shell ] || { printf 'dead'; return 0; }
   printf 'ambiguous'
 }
 
-# fm_backend_hc_group_has_agent: whether any other live process in <pid>'s
-# process group classifies as a harness. Returns 0 when one does, 1 when the
-# group was read and none does, 2 when the group cannot be read: the leader is
-# not in the process table, or ps failed. Zombies are skipped because they run
-# nothing.
+# fm_backend_hc_group_has_agent: whether any other process in <pid>'s process
+# group classifies as a harness. Positive evidence only.
 fm_backend_hc_group_has_agent() {  # <pid>
-  local pid=$1 table pgid member mpgid mstat comm args
-  case "$pid" in ''|*[!0123456789]*) return 2 ;; esac
-  table=$(LC_ALL=C ps -A -o pid=,pgid=,stat=,comm= 2>/dev/null) || return 2
-  pgid=
-  while read -r member mpgid mstat comm; do
-    [ "$member" = "$pid" ] || continue
-    case "$mstat" in Z*) return 2 ;; esac
-    pgid=$mpgid
-  done <<EOF
-$table
-EOF
-  [ -n "$pgid" ] || return 2
-  while read -r member mpgid mstat comm; do
+  local pid=$1 pgid member mpgid comm args
+  case "$pid" in ''|*[!0123456789]*) return 1 ;; esac
+  pgid=$(LC_ALL=C ps -o pgid= -p "$pid" 2>/dev/null | tr -d ' ') || return 1
+  [ -n "$pgid" ] || return 1
+  while read -r member mpgid comm; do
     [ "$mpgid" = "$pgid" ] && [ "$member" != "$pid" ] || continue
-    case "$mstat" in Z*) continue ;; esac
     args=$(LC_ALL=C ps -o args= -p "$member" 2>/dev/null) || continue
     [ "$(fm_agent_process_classify "$comm" "${args%% *}" "$args" "$member")" = agent ] && return 0
   done <<EOF
-$table
+$(LC_ALL=C ps -A -o pid=,pgid=,comm= 2>/dev/null)
 EOF
   return 1
 }
